@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Audio Visualizer</title>
+  <link rel="stylesheet" href="/css/styles.css">
+  <link rel="stylesheet" href="/css/itunes.css">
+</head>
+<body>
+  <div class="window">
+    <div class="title-bar">
+      <div class="title-bar-left">
+        <span class="title-icon">♫</span>
+        <span class="title-text">Audio Visualizer</span>
+      </div>
+      <div class="title-bar-controls">
+        <button class="title-btn" aria-label="Maximize" id="maximize-btn">
+          <span class="btn-icon">□</span>
+        </button>
+      </div>
+    </div>
+
+    <div class="menu-bar">
+      <div class="menu-item">
+        <span class="menu-label"><u>F</u>ile</span>
+        <div class="menu-dropdown">
+          <div class="menu-option" id="start-capture">Start Capture</div>
+          <div class="menu-option" id="stop-capture">Stop Capture</div>
+          <div class="menu-separator"></div>
+          <div class="menu-option" id="save-config">Save Configuration...</div>
+          <div class="menu-option" id="load-config">Load Configuration</div>
+          <div class="menu-option" id="manage-configs">Manage Saved...</div>
+          <div class="menu-separator"></div>
+          <div class="menu-option" id="menu-exit">Exit</div>
+        </div>
+      </div>
+      <div class="menu-item">
+        <span class="menu-label"><u>V</u>iew</span>
+        <div class="menu-dropdown">
+          <div class="menu-option" id="fullscreen">Fullscreen</div>
+        </div>
+      </div>
+      <div class="menu-item">
+        <span class="menu-label"><u>P</u>resets</span>
+        <div class="menu-dropdown">
+          <div class="menu-option preset-menu" data-preset="oscilloscope">Oscilloscope</div>
+          <div class="menu-option preset-menu" data-preset="lissajous">Lissajous</div>
+          <div class="menu-option preset-menu" data-preset="spectrum">Spectrum Analyzer</div>
+          <div class="menu-option preset-menu" data-preset="liquid">Orbs</div>
+          <div class="menu-option preset-menu" data-preset="liquidMetal">Lava Lamp</div>
+          <div class="menu-option preset-menu" data-preset="liquidShow">Liquid Lights</div>
+          <div class="menu-option preset-menu" data-preset="itunes">iTunes Visualizer</div>
+        </div>
+      </div>
+      <div class="menu-item">
+        <span class="menu-label"><u>H</u>elp</span>
+        <div class="menu-dropdown">
+          <div class="menu-option" id="about">About</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="main-content">
+      <div class="canvas-container">
+        <canvas id="visualizer"></canvas>
+        <div class="start-overlay" id="start-overlay">
+          <button class="start-btn" id="start-btn">&#9654; START CAPTURE</button>
+          <p class="start-hint">Captures system audio for visualization</p>
+          <p class="start-hint">Select "Entire Screen" and check "Share audio"</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="control-panel">
+      <fieldset class="group-box presets-group">
+        <legend>Presets</legend>
+        <div class="preset-buttons" id="preset-buttons"></div>
+      </fieldset>
+      <fieldset class="group-box params-group">
+        <legend>Parameters</legend>
+        <div class="knobs-container" id="knobs-container"></div>
+      </fieldset>
+    </div>
+
+    <div class="status-bar">
+      <div class="status-section status-main" id="status-text">Ready</div>
+      <div class="status-section status-fps" id="status-fps">
+        <span id="fps-text">-- fps</span>
+        <div class="fps-dropdown" id="fps-dropdown">
+          <div class="fps-option" data-fps="24">24 fps</div>
+          <div class="fps-option" data-fps="30">30 fps</div>
+          <div class="fps-option active" data-fps="60">60 fps</div>
+          <div class="fps-option" data-fps="120">120 fps</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="/js/main.js"></script>
+</body>
+</html>

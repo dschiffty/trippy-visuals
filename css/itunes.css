@@ -1,0 +1,484 @@
+/* ============================================
+   iTunes Visualizer Theme
+   Classic brushed-metal / Aqua-era Apple styling
+   ============================================ */
+
+/* === Window overrides === */
+.window.itunes-active {
+  background: #b0b0b0;
+  font-family: 'Lucida Grande', 'Helvetica Neue', 'Segoe UI', Arial, sans-serif;
+}
+
+.window.itunes-active .main-content {
+  padding: 0;
+  border: none;
+}
+
+.window.itunes-active .canvas-container {
+  border: 2px solid #222;
+  box-shadow: inset 0 2px 8px rgba(0,0,0,0.6), 0 1px 0 rgba(255,255,255,0.15);
+}
+
+/* Menu bar restyled for iTunes chrome */
+.window.itunes-active .menu-bar {
+  background: linear-gradient(180deg,
+    #d8d8d8 0%, #c8c8c8 15%, #b8b8b8 50%, #a8a8a8 85%, #9a9a9a 100%);
+  border-bottom: 1px solid #666;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.4);
+  padding: 0 8px;
+  font-family: 'Lucida Grande', 'Helvetica Neue', 'Segoe UI', Arial, sans-serif;
+}
+
+.window.itunes-active .menu-bar .menu-label {
+  color: #222;
+  font-size: 12px;
+  text-shadow: 0 1px 0 rgba(255,255,255,0.4);
+}
+
+.window.itunes-active .menu-bar .menu-item:hover .menu-label {
+  background: rgba(60,130,200,0.3);
+  border-radius: 3px;
+}
+
+/* === Top Bar (Brushed Metal) === */
+.itunes-top-bar {
+  display: flex;
+  align-items: center;
+  height: 58px;
+  padding: 0 12px;
+  background: linear-gradient(180deg,
+    #e0e0e0 0%, #d0d0d0 3%, #c8c8c8 15%,
+    #bcbcbc 40%, #b0b0b0 60%, #a4a4a4 85%, #989898 100%);
+  border-bottom: 1px solid #555;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.5);
+  flex-shrink: 0;
+  gap: 8px;
+  z-index: 50;
+}
+
+/* === Transport Controls === */
+.itunes-transport {
+  display: flex;
+  gap: 3px;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.itunes-btn {
+  border: none;
+  cursor: pointer;
+  font-family: inherit;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  outline: none;
+}
+
+.itunes-btn.transport {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: linear-gradient(180deg, #e8e8e8 0%, #c4c4c4 45%, #a8a8a8 100%);
+  border: 1px solid #777;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.25), inset 0 1px 0 rgba(255,255,255,0.5);
+  font-size: 9px;
+  color: #333;
+  padding: 0;
+  line-height: 1;
+}
+
+.itunes-btn.transport:hover {
+  background: linear-gradient(180deg, #f0f0f0 0%, #d0d0d0 45%, #b0b0b0 100%);
+}
+
+.itunes-btn.transport:active {
+  background: linear-gradient(180deg, #a0a0a0 0%, #909090 45%, #808080 100%);
+  box-shadow: inset 0 1px 3px rgba(0,0,0,0.4);
+}
+
+.itunes-btn.transport.play {
+  width: 32px;
+  height: 32px;
+  font-size: 12px;
+}
+
+/* === LCD Display === */
+.itunes-display {
+  flex: 1;
+  max-width: 360px;
+  height: 38px;
+  background: linear-gradient(180deg, #0f0f1e 0%, #1a1a30 40%, #101028 100%);
+  border-radius: 5px;
+  border: 1px solid #555;
+  box-shadow: inset 0 2px 5px rgba(0,0,0,0.7), 0 1px 0 rgba(255,255,255,0.25);
+  padding: 3px 12px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  overflow: hidden;
+  margin: 0 4px;
+}
+
+.itunes-song-info {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+}
+
+.itunes-song-title {
+  color: #8ec8ff;
+  font-size: 10px;
+  font-weight: bold;
+  text-shadow: 0 0 6px rgba(100,180,255,0.4);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.itunes-song-artist {
+  color: #6aa8dd;
+  font-size: 9px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.itunes-progress-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.itunes-time {
+  color: #5a90b8;
+  font-size: 8px;
+  font-family: 'Monaco', 'Menlo', monospace;
+  flex-shrink: 0;
+  min-width: 28px;
+}
+
+.itunes-time.right {
+  text-align: right;
+}
+
+.itunes-progress-bar {
+  flex: 1;
+  height: 4px;
+  background: #0a0a18;
+  border-radius: 2px;
+  border: 1px solid #333;
+  overflow: hidden;
+}
+
+.itunes-progress-fill {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(180deg, #6ab4e8, #3888c8);
+  border-radius: 2px;
+  transition: width 1s linear;
+}
+
+/* === Top Right (Volume + Search) === */
+.itunes-top-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.itunes-volume {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.itunes-volume-icon {
+  font-size: 10px;
+  color: #555;
+}
+
+.itunes-volume-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 60px;
+  height: 4px;
+  background: linear-gradient(180deg, #888, #aaa);
+  border-radius: 2px;
+  outline: none;
+  border: 1px solid #777;
+}
+
+.itunes-volume-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: linear-gradient(180deg, #e8e8e8, #bbb);
+  border: 1px solid #777;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.3);
+  cursor: pointer;
+}
+
+.itunes-search {
+  display: flex;
+  align-items: center;
+}
+
+.itunes-search-input {
+  width: 110px;
+  height: 20px;
+  border-radius: 10px;
+  border: 1px solid #888;
+  background: #fff;
+  padding: 0 8px 0 22px;
+  font-size: 10px;
+  font-family: inherit;
+  outline: none;
+  box-shadow: inset 0 1px 2px rgba(0,0,0,0.15);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23999' stroke-width='2'%3E%3Ccircle cx='11' cy='11' r='8'/%3E%3Cline x1='21' y1='21' x2='16.65' y2='16.65'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: 6px center;
+  background-size: 11px;
+}
+
+.itunes-search-input:focus {
+  border-color: #5599cc;
+  box-shadow: 0 0 3px rgba(80,150,200,0.4), inset 0 1px 2px rgba(0,0,0,0.15);
+}
+
+.itunes-options-btn {
+  font-size: 10px;
+  padding: 3px 10px;
+  border-radius: 3px;
+  background: linear-gradient(180deg, #e0e0e0 0%, #c0c0c0 100%);
+  border: 1px solid #888;
+  box-shadow: 0 1px 1px rgba(0,0,0,0.15), inset 0 1px 0 rgba(255,255,255,0.4);
+  color: #333;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.itunes-options-btn:active {
+  background: linear-gradient(180deg, #a8a8a8 0%, #909090 100%);
+  box-shadow: inset 0 1px 2px rgba(0,0,0,0.3);
+}
+
+/* === Bottom Bar === */
+.itunes-bottom-bar {
+  display: flex;
+  align-items: center;
+  min-height: 52px;
+  padding: 4px 12px;
+  gap: 12px;
+  background: linear-gradient(180deg,
+    #ccc 0%, #bcbcbc 20%, #b0b0b0 50%, #a4a4a4 80%, #999 100%);
+  border-top: 1px solid #ddd;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.35);
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  z-index: 50;
+}
+
+.itunes-bottom-left {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.itunes-bottom-center {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex: 1;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.itunes-bottom-right {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+/* === Selects (Mode/Palette) === */
+.itunes-select-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  align-items: flex-start;
+}
+
+.itunes-select-label {
+  font-size: 8px;
+  color: #555;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-weight: bold;
+}
+
+.itunes-select {
+  font-family: inherit;
+  font-size: 11px;
+  background: #fff;
+  border: 1px solid #888;
+  border-radius: 3px;
+  padding: 2px 20px 2px 6px;
+  height: 22px;
+  box-shadow: 0 1px 1px rgba(0,0,0,0.1), inset 0 1px 0 rgba(255,255,255,0.8);
+  color: #333;
+  cursor: pointer;
+  outline: none;
+}
+
+.itunes-select:focus {
+  border-color: #5599cc;
+}
+
+/* === Knobs === */
+.itunes-knobs-row {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+.itunes-knob-wrapper {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  min-width: 32px;
+}
+
+.knob.itunes-knob {
+  width: 30px;
+  height: 30px;
+  background: radial-gradient(circle at 40% 35%, #ccc 0%, #999 50%, #666 100%);
+  border: 1px solid #555;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.3);
+}
+
+.itunes-dyn-dot {
+  background: #888 !important;
+}
+.itunes-dyn-dot:hover {
+  background: #aaa !important;
+}
+.itunes-dyn-dot.active {
+  background: #4488ff !important;
+  box-shadow: 0 0 5px rgba(68,136,255,0.7) !important;
+}
+
+.knob.itunes-knob .knob-indicator {
+  width: 2px;
+  height: 8px;
+  top: 3px;
+  background: #4488ff;
+  box-shadow: 0 0 4px rgba(68,136,255,0.7);
+}
+
+.itunes-knob-wrapper .knob-label {
+  font-size: 8px;
+  color: #444;
+  font-weight: bold;
+}
+
+.itunes-knob-wrapper .knob-value {
+  font-size: 8px;
+  color: #666;
+  font-family: 'Monaco', 'Menlo', monospace;
+}
+
+/* === Journey Slider === */
+.itunes-journey-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
+.itunes-journey-label {
+  font-size: 8px;
+  color: #555;
+  font-weight: bold;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.itunes-journey-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 80px;
+  height: 4px;
+  background: linear-gradient(180deg, #777, #999);
+  border-radius: 2px;
+  outline: none;
+  border: 1px solid #666;
+}
+
+.itunes-journey-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: linear-gradient(180deg, #e8e8e8, #bbb);
+  border: 1px solid #777;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.3);
+  cursor: pointer;
+}
+
+/* === Fullscreen overrides === */
+.window.fullscreen-mode.itunes-active .itunes-top-bar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 200;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.3s ease;
+}
+
+.window.fullscreen-mode.itunes-active .itunes-bottom-bar {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 200;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.3s ease;
+}
+
+.window.fullscreen-mode.itunes-active .menu-bar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 210;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.3s ease;
+}
+
+.window.fullscreen-mode.itunes-active .itunes-top-bar {
+  top: 24px;
+}
+
+.window.fullscreen-mode.itunes-active.show-ui .itunes-top-bar,
+.window.fullscreen-mode.itunes-active.show-ui .itunes-bottom-bar,
+.window.fullscreen-mode.itunes-active.show-ui .menu-bar {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.window.fullscreen-mode.itunes-active .canvas-container {
+  border: none;
+  box-shadow: none;
+}
