@@ -294,6 +294,49 @@ html, body {
   margin-bottom: 8px;
 }
 
+.demo-player {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.demo-btn {
+  padding: 6px 14px;
+  font-size: 11px;
+  font-family: inherit;
+  background: #c0c0c0;
+  border-top: 2px solid #ffffff;
+  border-left: 2px solid #ffffff;
+  border-right: 2px solid #404040;
+  border-bottom: 2px solid #404040;
+  cursor: pointer;
+  color: #000;
+}
+
+.demo-btn:hover {
+  background: #d0d0d0;
+}
+
+.demo-btn:active,
+.demo-btn.playing {
+  border-top-color: #404040;
+  border-left-color: #404040;
+  border-right-color: #ffffff;
+  border-bottom-color: #ffffff;
+}
+
+.demo-btn.playing {
+  background: #a8c8a8;
+}
+
+.demo-label {
+  color: rgba(0, 255, 65, 0.4);
+  font-family: 'Courier New', monospace;
+  font-size: 11px;
+  font-style: italic;
+}
+
 .help-link {
   color: rgba(100, 180, 255, 0.7);
   font-family: 'Courier New', monospace;

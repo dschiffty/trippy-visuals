@@ -796,16 +796,19 @@ export class ITunesVisualizer {
     const topBar = document.createElement('div');
     topBar.className = 'itunes-top-bar';
 
-    // Back button (navigate to other presets)
+    // Back button (navigate to previous preset)
     const backBtn = document.createElement('button');
     backBtn.className = 'itunes-btn transport';
     backBtn.textContent = '\u25C0';
-    backBtn.title = 'Back to Presets';
+    backBtn.title = 'Back to Previous Preset';
     backBtn.style.marginRight = '6px';
     backBtn.addEventListener('click', () => {
-      // Trigger preset switch via the menu system
-      const presetMenu = document.querySelector('.preset-menu[data-preset="oscilloscope"]');
-      if (presetMenu) presetMenu.click();
+      if (this.onBack) {
+        this.onBack();
+      } else {
+        const presetMenu = document.querySelector('.preset-menu[data-preset="oscilloscope"]');
+        if (presetMenu) presetMenu.click();
+      }
     });
 
     // Transport buttons (media controls)
@@ -884,9 +887,28 @@ export class ITunesVisualizer {
     display.appendChild(songInfo);
     display.appendChild(progressWrap);
 
+    // Fullscreen button (old Mac style)
+    const fsBtn = document.createElement('button');
+    fsBtn.className = 'itunes-fs-btn';
+    fsBtn.title = 'Fullscreen';
+    fsBtn.innerHTML = '<span class="mac-fs-icon"></span>';
+    fsBtn.addEventListener('click', () => {
+      if (this.onFullscreen) {
+        this.onFullscreen();
+      } else {
+        const el = document.documentElement;
+        if (!document.fullscreenElement) {
+          el.requestFullscreen?.() || el.webkitRequestFullscreen?.();
+        } else {
+          document.exitFullscreen?.() || document.webkitExitFullscreen?.();
+        }
+      }
+    });
+
     topBar.appendChild(backBtn);
     topBar.appendChild(transport);
     topBar.appendChild(display);
+    topBar.appendChild(fsBtn);
 
     // === BOTTOM BAR ===
     const bottomBar = document.createElement('div');
@@ -998,12 +1020,19 @@ export class ITunesVisualizer {
     journeyWrap.appendChild(journeyLabel);
     journeyWrap.appendChild(journeySlider);
 
-    // Randomize button (iTunes shuffle icon)
+    // Randomize params button (shuffle current style)
     const randomBtn = document.createElement('button');
     randomBtn.className = 'itunes-btn itunes-options-btn';
-    randomBtn.textContent = '\uD83D\uDD00';
-    randomBtn.title = 'Shuffle';
-    randomBtn.addEventListener('click', () => this._randomize());
+    randomBtn.textContent = '🎲';
+    randomBtn.title = 'Randomize Settings';
+    randomBtn.addEventListener('click', () => this._randomizeParams());
+
+    // Randomize all button (random style + params)
+    const randomAllBtn = document.createElement('button');
+    randomAllBtn.className = 'itunes-btn itunes-options-btn';
+    randomAllBtn.textContent = '🔀';
+    randomAllBtn.title = 'Randomize Style + Settings';
+    randomAllBtn.addEventListener('click', () => this._randomizeAll());
 
     // Dynamic button
     const dynamicBtn = document.createElement('button');
@@ -1015,6 +1044,7 @@ export class ITunesVisualizer {
 
     bottomRight.appendChild(journeyWrap);
     bottomRight.appendChild(randomBtn);
+    bottomRight.appendChild(randomAllBtn);
     bottomRight.appendChild(dynamicBtn);
 
     bottomBar.appendChild(bottomLeft);
@@ -1184,7 +1214,7 @@ export class ITunesVisualizer {
   // Randomize & Dynamic
   // ============================================
 
-  _randomize() {
+  _randomizeParams() {
     KNOB_PARAMS.forEach((param, i) => {
       const range = param.max - param.min;
       let newValue = param.min + Math.random() * range;
@@ -1198,11 +1228,17 @@ export class ITunesVisualizer {
       }
     });
 
-    // Random mode & palette
-    this.currentMode = MODES[Math.floor(Math.random() * MODES.length)];
+    // Random palette only
     this.currentPalette = PALETTE_NAMES[Math.floor(Math.random() * PALETTE_NAMES.length)];
-    if (this._modeSelect) this._modeSelect.value = this.currentMode;
     if (this._paletteSelect) this._paletteSelect.value = this.currentPalette;
+  }
+
+  _randomizeAll() {
+    this._randomizeParams();
+
+    // Also random mode
+    this.currentMode = MODES[Math.floor(Math.random() * MODES.length)];
+    if (this._modeSelect) this._modeSelect.value = this.currentMode;
     if (this.currentMode === 'ribbons') this._initRibbons();
     if (this.currentMode === 'pulse') this.pulseRings = [];
   }

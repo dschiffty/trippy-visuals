@@ -34,6 +34,7 @@ class App {
       this.visualizers[key] = new Cls(this.canvas);
     }
     this.activeKey = 'oscilloscope';
+    this.previousKey = null;
     this.activeVisualizer = this.visualizers.oscilloscope;
 
     // Controls
@@ -91,11 +92,21 @@ class App {
       document.querySelector('.params-group').style.display = '';
     }
 
+    this.previousKey = this.activeKey;
     this.activeKey = key;
     this.activeVisualizer = this.visualizers[key];
 
     if (this.activeVisualizer.buildPanel) {
-      // Custom panel mode — hide standard params, build custom UI
+      // Custom panel mode — hook up callbacks before building
+      this.activeVisualizer.onBack = () => {
+        const target = this.previousKey && this.previousKey !== key ? this.previousKey : 'oscilloscope';
+        this.switchPreset(target);
+        this.controls.setupPresets(
+          Object.entries(VIZ_CLASSES).map(([k, C]) => ({ key: k, label: C.label })),
+          target,
+        );
+      };
+      this.activeVisualizer.onFullscreen = () => this.toggleFullscreen();
       document.querySelector('.params-group').style.display = 'none';
       this.activeVisualizer.buildPanel(document.querySelector('.control-panel'));
     } else {
@@ -123,6 +134,27 @@ class App {
 
     // Start button
     document.getElementById('start-btn').addEventListener('click', () => this.startCapture());
+
+    // Demo audio player
+    const demoBtn = document.getElementById('demo-btn');
+    const demoAudio = document.getElementById('demo-audio');
+    if (demoBtn && demoAudio) {
+      demoBtn.addEventListener('click', () => {
+        if (demoAudio.paused) {
+          demoAudio.play();
+          demoBtn.textContent = '⏸ Pause Demo';
+          demoBtn.classList.add('playing');
+        } else {
+          demoAudio.pause();
+          demoBtn.textContent = '🎵 Play Demo Track';
+          demoBtn.classList.remove('playing');
+        }
+      });
+      demoAudio.addEventListener('ended', () => {
+        demoBtn.textContent = '🎵 Play Demo Track';
+        demoBtn.classList.remove('playing');
+      });
+    }
 
     // Help modal
     const helpModal = document.getElementById('help-modal');
