@@ -65,11 +65,19 @@
       <div class="canvas-container">
         <canvas id="visualizer"></canvas>
         <div class="start-overlay" id="start-overlay">
-          <button class="start-btn" id="start-btn">&#9654; START CAPTURE</button>
-          <p class="start-hint">Captures system audio for visualization</p>
-          <p class="start-hint">Select "Entire Screen" and check "Share audio"</p>
-          <p class="start-hint">Works in Chrome, Edge, Brave, Arc, and Opera only</p>
-          <a class="help-link" id="help-link">Still need help? Click here</a>
+          <div class="mobile-warning hidden" id="mobile-warning">
+            <p class="mobile-warning-icon">🖥️</p>
+            <p class="mobile-warning-title">Desktop Browser Required</p>
+            <p class="mobile-warning-text">This app captures system audio to create visualizations and requires a desktop browser (Chrome, Edge, Brave, Arc, or Opera).</p>
+            <p class="mobile-warning-text">Please visit this site on a computer to use it!</p>
+          </div>
+          <div class="desktop-content" id="desktop-content">
+            <button class="start-btn" id="start-btn">&#9654; START CAPTURE</button>
+            <p class="start-hint">Captures system audio for visualization</p>
+            <p class="start-hint">Select "Entire Screen" and check "Share audio"</p>
+            <p class="start-hint">Works in Chrome, Edge, Brave, Arc, and Opera only</p>
+            <a class="help-link" id="help-link">Still need help? Click here</a>
+          </div>
         </div>
 
         <!-- Help Modal -->

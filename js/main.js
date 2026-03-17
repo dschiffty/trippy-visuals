@@ -113,6 +113,14 @@ class App {
   /* ---- UI Events ---- */
 
   setupUI() {
+    // Mobile detection
+    const isMobile = /Android|iPhone|iPad|iPod|webOS|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent)
+      || (navigator.maxTouchPoints > 1 && window.innerWidth < 1024);
+    if (isMobile) {
+      document.getElementById('mobile-warning')?.classList.remove('hidden');
+      document.getElementById('desktop-content')?.style.setProperty('display', 'none');
+    }
+
     // Start button
     document.getElementById('start-btn').addEventListener('click', () => this.startCapture());
 
