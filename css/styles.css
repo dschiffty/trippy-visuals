@@ -337,6 +337,27 @@ html, body {
   font-style: italic;
 }
 
+.demo-links {
+  font-family: 'Courier New', monospace;
+  font-size: 10px;
+}
+
+.demo-links a {
+  color: rgba(100, 180, 255, 0.5);
+  text-decoration: none;
+  transition: color 0.2s;
+}
+
+.demo-links a:hover {
+  color: rgba(100, 180, 255, 1);
+  text-decoration: underline;
+}
+
+.demo-links a + a::before {
+  content: ' · ';
+  color: rgba(100, 180, 255, 0.3);
+}
+
 .help-link {
   color: rgba(100, 180, 255, 0.7);
   font-family: 'Courier New', monospace;
@@ -821,6 +842,54 @@ html, body {
   color: #000;
 }
 
+.status-demo {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 6px;
+  border-right: 1px solid #808080;
+  box-shadow: 1px 0 0 #fff;
+}
+
+.demo-mini-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 10px;
+  padding: 0 2px;
+  line-height: 1;
+}
+
+.demo-mini-btn:hover {
+  background: #d0d0d0;
+}
+
+.demo-mini-label {
+  font-size: 10px;
+  color: #333;
+  white-space: nowrap;
+}
+
+.demo-mini-links {
+  font-size: 10px;
+  white-space: nowrap;
+  margin-left: 2px;
+}
+
+.demo-mini-links a {
+  color: #0066cc;
+  text-decoration: none;
+}
+
+.demo-mini-links a:hover {
+  text-decoration: underline;
+}
+
+.demo-mini-links a + a::before {
+  content: ' · ';
+  color: #999;
+}
+
 .status-main {
   flex: 1;
 }
@@ -995,7 +1064,9 @@ html, body {
 }
 
 .ll-toolbar {
-  margin-top: 4px;
+  margin-top: auto;
+  padding-top: 4px;
+  padding-bottom: 40px;
 }
 
 .ll-image-row {

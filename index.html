@@ -32,6 +32,9 @@
           <div class="menu-option" id="load-config">Load Configuration</div>
           <div class="menu-option" id="manage-configs">Manage Saved...</div>
           <div class="menu-separator"></div>
+          <div class="menu-option" id="export-config">Export to File...</div>
+          <div class="menu-option" id="import-config">Import from File...</div>
+          <div class="menu-separator"></div>
           <div class="menu-option" id="menu-exit">Exit</div>
         </div>
       </div>
@@ -75,14 +78,12 @@
             <button class="start-btn" id="start-btn">&#9654; START CAPTURE</button>
             <p class="start-hint">Captures system audio for visualization</p>
             <p class="start-hint">Select "Entire Screen" and check "Share audio"</p>
-            <p class="start-hint">Works in Chrome, Edge, Brave, Arc, and Opera only</p>
+            <p class="start-hint">Chrome only | <a class="help-link" id="help-link">Still need help? Click here</a></p>
             <div class="demo-player" id="demo-player">
               <button class="demo-btn" id="demo-btn">🎵 Play Demo Track</button>
-              <span class="demo-label">Nice Clean Shirt</span>
             </div>
-            <a class="help-link" id="help-link">Still need help? Click here</a>
           </div>
-          <audio id="demo-audio" src="/audio/demo.mp3" preload="none"></audio>
+          <audio id="demo-audio" src="/audio/demo.mp3" preload="none" loop></audio>
         </div>
 
         <!-- Help Modal -->
@@ -114,6 +115,7 @@
                 <div class="help-step-text">Click <strong>Share</strong> — and enjoy the visuals! 🎶</div>
               </div>
               <p class="help-note">⚠️ "Share system audio" is required — without it, the visualizer won't respond to music.</p>
+              <p class="help-note">🌐 Works in Chrome, Edge, Brave, Arc, and Opera only. Not supported on Safari or mobile browsers.</p>
             </div>
           </div>
         </div>
@@ -132,6 +134,15 @@
     </div>
 
     <div class="status-bar">
+      <div class="status-section status-demo" id="demo-mini">
+        <button class="demo-mini-btn" id="demo-mini-btn">▶</button>
+        <span class="demo-mini-label">Play demo track: Nice Clean Shirt — Beeef</span>
+        <span class="demo-mini-links">
+          <a href="https://beeef.bandcamp.com/album/somebodys-favorite" target="_blank" rel="noopener">Bandcamp</a>
+          <a href="https://open.spotify.com/artist/7H3XA0651dLTrDSIKMqV9r" target="_blank" rel="noopener">Spotify</a>
+          <a href="https://music.apple.com/us/artist/beeef/1470550852" target="_blank" rel="noopener">Apple Music</a>
+        </span>
+      </div>
       <div class="status-section status-main" id="status-text">Ready</div>
       <div class="status-section status-fps" id="status-fps">
         <span id="fps-text">-- fps</span>

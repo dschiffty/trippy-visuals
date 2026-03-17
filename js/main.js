@@ -138,21 +138,40 @@ class App {
     // Demo audio player
     const demoBtn = document.getElementById('demo-btn');
     const demoAudio = document.getElementById('demo-audio');
+    const demoMini = document.getElementById('demo-mini');
+    const demoMiniBtn = document.getElementById('demo-mini-btn');
+
+    const updateDemoUI = () => {
+      const playing = !demoAudio.paused;
+      demoBtn.textContent = playing ? '⏸ Pause Demo' : '🎵 Play Demo Track';
+      demoBtn.classList.toggle('playing', playing);
+      if (demoMiniBtn) demoMiniBtn.textContent = playing ? '⏸' : '▶';
+    };
+
     if (demoBtn && demoAudio) {
       demoBtn.addEventListener('click', () => {
-        if (demoAudio.paused) {
-          demoAudio.play();
-          demoBtn.textContent = '⏸ Pause Demo';
-          demoBtn.classList.add('playing');
-        } else {
-          demoAudio.pause();
-          demoBtn.textContent = '🎵 Play Demo Track';
-          demoBtn.classList.remove('playing');
-        }
+        demoAudio.paused ? demoAudio.play() : demoAudio.pause();
       });
-      demoAudio.addEventListener('ended', () => {
-        demoBtn.textContent = '🎵 Play Demo Track';
-        demoBtn.classList.remove('playing');
+      demoAudio.addEventListener('play', updateDemoUI);
+      demoAudio.addEventListener('pause', updateDemoUI);
+
+      // Prevent hardware media keys from controlling the demo track
+      if ('mediaSession' in navigator) {
+        navigator.mediaSession.setActionHandler('play', null);
+        navigator.mediaSession.setActionHandler('pause', null);
+        navigator.mediaSession.setActionHandler('stop', null);
+        navigator.mediaSession.setActionHandler('previoustrack', null);
+        navigator.mediaSession.setActionHandler('nexttrack', null);
+        demoAudio.addEventListener('play', () => {
+          navigator.mediaSession.setActionHandler('play', null);
+          navigator.mediaSession.setActionHandler('pause', null);
+        });
+      }
+    }
+
+    if (demoMiniBtn && demoAudio) {
+      demoMiniBtn.addEventListener('click', () => {
+        demoAudio.paused ? demoAudio.play() : demoAudio.pause();
       });
     }
 
@@ -177,6 +196,8 @@ class App {
     document.getElementById('save-config')?.addEventListener('click', () => this.saveConfig());
     document.getElementById('load-config')?.addEventListener('click', () => this.showLoadDialog());
     document.getElementById('manage-configs')?.addEventListener('click', () => this.showManageDialog());
+    document.getElementById('export-config')?.addEventListener('click', () => this.exportConfig());
+    document.getElementById('import-config')?.addEventListener('click', () => this.importConfig());
 
     // Preset menu items
     document.querySelectorAll('.preset-menu').forEach((el) => {
@@ -582,6 +603,72 @@ class App {
 
     dialog.querySelector('.dialog-body').appendChild(list);
     document.body.appendChild(dialog);
+  }
+
+  exportConfig() {
+    const state = this._captureState();
+    const preset = VIZ_CLASSES[this.activeKey]?.label || this.activeKey;
+    const data = {
+      name: `${preset} — ${new Date().toLocaleString()}`,
+      date: new Date().toISOString(),
+      state,
+      version: 1,
+    };
+    const json = JSON.stringify(data, null, 2);
+    const blob = new Blob([json], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+
+    const a = document.createElement('a');
+    a.href = url;
+    const safeName = preset.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+    a.download = `visualizer-${safeName}-${Date.now()}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+
+    this.statusText.textContent = `Exported: ${data.name}`;
+  }
+
+  importConfig() {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.json';
+    input.style.display = 'none';
+    document.body.appendChild(input);
+
+    input.addEventListener('change', () => {
+      const file = input.files[0];
+      if (!file) return;
+
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        try {
+          const data = JSON.parse(e.target.result);
+          if (!data.state || !data.state.preset) {
+            alert('Invalid configuration file.\n\nThe file does not contain a valid visualizer configuration.');
+            return;
+          }
+          this._applyState(data.state);
+          this.statusText.textContent = `Imported: ${data.name || file.name}`;
+
+          // Also save to localStorage so it shows up in Manage Saved
+          const configs = this._getConfigs();
+          configs.push({
+            name: data.name || file.name.replace('.json', ''),
+            date: data.date || new Date().toISOString(),
+            state: data.state,
+          });
+          this._setConfigs(configs);
+        } catch (err) {
+          alert('Could not read configuration file.\n\n' + err.message);
+        }
+      };
+      reader.readAsText(file);
+      document.body.removeChild(input);
+    });
+
+    input.click();
   }
 
   _createDialog(title) {

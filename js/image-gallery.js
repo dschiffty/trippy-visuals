@@ -183,6 +183,238 @@ function generateDiamondPattern(color1, color2) {
   return c;
 }
 
+function generateWaves(colors, frequency = 8) {
+  const size = 256;
+  const c = document.createElement('canvas');
+  c.width = size; c.height = size;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = colors[0];
+  ctx.fillRect(0, 0, size, size);
+  const bandH = size / colors.length;
+  for (let ci = 1; ci < colors.length; ci++) {
+    ctx.beginPath();
+    ctx.moveTo(0, size);
+    for (let x = 0; x <= size; x++) {
+      const y = ci * bandH + Math.sin(x / size * Math.PI * frequency + ci * 0.8) * (bandH * 0.4);
+      ctx.lineTo(x, y);
+    }
+    ctx.lineTo(size, size);
+    ctx.closePath();
+    ctx.fillStyle = colors[ci];
+    ctx.globalAlpha = 0.7;
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+  return c;
+}
+
+function generateMosaic(colors, tileSize = 16) {
+  const size = 256;
+  const c = document.createElement('canvas');
+  c.width = size; c.height = size;
+  const ctx = c.getContext('2d');
+  for (let y = 0; y < size; y += tileSize) {
+    for (let x = 0; x < size; x += tileSize) {
+      ctx.fillStyle = colors[Math.floor(Math.random() * colors.length)];
+      ctx.fillRect(x, y, tileSize, tileSize);
+    }
+  }
+  return c;
+}
+
+function generateConcentricRings(colors) {
+  const size = 256;
+  const c = document.createElement('canvas');
+  c.width = size; c.height = size;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, size, size);
+  const cx = size / 2, cy = size / 2;
+  const maxR = size * 0.7;
+  const rings = 12;
+  for (let i = rings; i >= 0; i--) {
+    const r = (i / rings) * maxR;
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.fillStyle = colors[i % colors.length];
+    ctx.fill();
+  }
+  return c;
+}
+
+function generateFractalNoise(hue) {
+  const size = 256;
+  const c = document.createElement('canvas');
+  c.width = size; c.height = size;
+  const ctx = c.getContext('2d');
+  const imageData = ctx.createImageData(size, size);
+  const data = imageData.data;
+  const seed = Math.random() * 1000;
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      let val = 0, amp = 1, freq = 0.02;
+      for (let o = 0; o < 5; o++) {
+        val += Math.sin(x * freq + seed + o * 3.7) * Math.cos(y * freq + seed * 1.3 + o * 2.1) * amp;
+        amp *= 0.5;
+        freq *= 2;
+      }
+      val = (val + 1) * 0.5;
+      const h = hue / 360;
+      const s = 0.7 + val * 0.3;
+      const l = 0.15 + val * 0.5;
+      const [r, g, b] = hslToRgbGallery(h, s, l);
+      const idx = (y * size + x) * 4;
+      data[idx] = r; data[idx+1] = g; data[idx+2] = b; data[idx+3] = 255;
+    }
+  }
+  ctx.putImageData(imageData, 0, 0);
+  return c;
+}
+
+function generateStarburst(colors, rays = 16) {
+  const size = 256;
+  const c = document.createElement('canvas');
+  c.width = size; c.height = size;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, size, size);
+  const cx = size / 2, cy = size / 2;
+  const angleStep = (Math.PI * 2) / rays;
+  for (let i = 0; i < rays; i++) {
+    const a1 = i * angleStep;
+    const a2 = (i + 0.5) * angleStep;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.lineTo(cx + Math.cos(a1) * size, cy + Math.sin(a1) * size);
+    ctx.lineTo(cx + Math.cos(a2) * size, cy + Math.sin(a2) * size);
+    ctx.closePath();
+    ctx.fillStyle = colors[i % colors.length];
+    ctx.globalAlpha = 0.8;
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+  return c;
+}
+
+function generateHexGrid(color1, color2, hexSize = 20) {
+  const size = 256;
+  const c = document.createElement('canvas');
+  c.width = size; c.height = size;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = color1;
+  ctx.fillRect(0, 0, size, size);
+  ctx.strokeStyle = color2;
+  ctx.lineWidth = 1.5;
+  const h = hexSize * Math.sqrt(3);
+  for (let row = -1; row < size / h + 1; row++) {
+    for (let col = -1; col < size / (hexSize * 1.5) + 1; col++) {
+      const cx2 = col * hexSize * 1.5;
+      const cy2 = row * h + (col % 2 ? h / 2 : 0);
+      ctx.beginPath();
+      for (let i = 0; i < 6; i++) {
+        const angle = Math.PI / 3 * i + Math.PI / 6;
+        const hx = cx2 + hexSize * Math.cos(angle);
+        const hy = cy2 + hexSize * Math.sin(angle);
+        i === 0 ? ctx.moveTo(hx, hy) : ctx.lineTo(hx, hy);
+      }
+      ctx.closePath();
+      ctx.stroke();
+    }
+  }
+  return c;
+}
+
+function generateTieDye(colors) {
+  const size = 256;
+  const c = document.createElement('canvas');
+  c.width = size; c.height = size;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, size, size);
+  const cx = size / 2, cy = size / 2;
+  for (let a = 0; a < Math.PI * 2; a += 0.01) {
+    for (let r = 0; r < size / 2; r += 3) {
+      const wobble = Math.sin(a * 6 + r * 0.05) * 15;
+      const x = cx + Math.cos(a) * (r + wobble);
+      const y = cy + Math.sin(a) * (r + wobble);
+      const cIdx = Math.floor((a / (Math.PI * 2) * colors.length + r * 0.02)) % colors.length;
+      ctx.fillStyle = colors[cIdx];
+      ctx.globalAlpha = 0.15;
+      ctx.fillRect(x, y, 2, 2);
+    }
+  }
+  ctx.globalAlpha = 1;
+  return c;
+}
+
+function generateLightning(color, branches = 5) {
+  const size = 256;
+  const c = document.createElement('canvas');
+  c.width = size; c.height = size;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#0a0014';
+  ctx.fillRect(0, 0, size, size);
+  ctx.strokeStyle = color;
+  ctx.shadowColor = color;
+  ctx.shadowBlur = 8;
+  for (let b = 0; b < branches; b++) {
+    ctx.lineWidth = 1 + Math.random() * 2;
+    ctx.beginPath();
+    let x = Math.random() * size, y = 0;
+    ctx.moveTo(x, y);
+    while (y < size) {
+      x += (Math.random() - 0.5) * 30;
+      y += 5 + Math.random() * 15;
+      ctx.lineTo(x, y);
+    }
+    ctx.globalAlpha = 0.5 + Math.random() * 0.5;
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+  ctx.shadowBlur = 0;
+  return c;
+}
+
+function generateCrosshatch(bgColor, lineColor) {
+  const size = 256;
+  const c = document.createElement('canvas');
+  c.width = size; c.height = size;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = bgColor;
+  ctx.fillRect(0, 0, size, size);
+  ctx.strokeStyle = lineColor;
+  ctx.lineWidth = 1;
+  ctx.globalAlpha = 0.4;
+  const gap = 8;
+  for (let i = -size; i < size * 2; i += gap) {
+    ctx.beginPath(); ctx.moveTo(i, 0); ctx.lineTo(i + size, size); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(i + size, 0); ctx.lineTo(i, size); ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+  return c;
+}
+
+// HSL to RGB helper for gallery generators
+function hslToRgbGallery(h, s, l) {
+  let r, g, b;
+  if (s === 0) { r = g = b = l; }
+  else {
+    const hue2rgb = (p, q, t) => {
+      if (t < 0) t += 1; if (t > 1) t -= 1;
+      if (t < 1/6) return p + (q - p) * 6 * t;
+      if (t < 1/2) return q;
+      if (t < 2/3) return p + (q - p) * (2/3 - t) * 6;
+      return p;
+    };
+    const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+    const p = 2 * l - q;
+    r = hue2rgb(p, q, h + 1/3);
+    g = hue2rgb(p, q, h);
+    b = hue2rgb(p, q, h - 1/3);
+  }
+  return [Math.round(r * 255), Math.round(g * 255), Math.round(b * 255)];
+}
+
 // --- Gallery Definition ---
 export const GALLERY_IMAGES = [
   { name: 'Sunset',       generate: () => generateGradient(['#ff6b35', '#f7c948', '#ff2e63', '#8b1a4a'], 135) },
@@ -205,6 +437,29 @@ export const GALLERY_IMAGES = [
   { name: 'Plasma',       generate: () => generatePlasma() },
   { name: 'Spiral',       generate: () => generateSpiral(['#ff0000', '#ff8800', '#ffff00', '#00ff00', '#0088ff', '#8800ff']) },
   { name: 'Diamonds',     generate: () => generateDiamondPattern('#1a1a2e', '#e94560') },
+  { name: 'Waves',        generate: () => generateWaves(['#0a0033', '#3a0ca3', '#7209b7', '#f72585', '#ff8fa3'], 6) },
+  { name: 'Tide',         generate: () => generateWaves(['#023e8a', '#0077b6', '#00b4d8', '#90e0ef', '#caf0f8'], 4) },
+  { name: 'Mosaic',       generate: () => generateMosaic(['#ff006e', '#fb5607', '#ffbe0b', '#3a86ff', '#8338ec'], 12) },
+  { name: 'Pixel',        generate: () => generateMosaic(['#222', '#444', '#666', '#888', '#aaa'], 8) },
+  { name: 'Rings',        generate: () => generateConcentricRings(['#ff0055', '#ff8800', '#ffee00', '#00ff88', '#0088ff', '#8800ff']) },
+  { name: 'Target',       generate: () => generateConcentricRings(['#ffffff', '#cc0000']) },
+  { name: 'Fractal Blue', generate: () => generateFractalNoise(220) },
+  { name: 'Fractal Rose', generate: () => generateFractalNoise(330) },
+  { name: 'Fractal Jade', generate: () => generateFractalNoise(160) },
+  { name: 'Starburst',    generate: () => generateStarburst(['#ff0044', '#ff8800', '#ffcc00', '#00ff66', '#0088ff', '#cc00ff'], 12) },
+  { name: 'Pinwheel',     generate: () => generateStarburst(['#000', '#fff'], 24) },
+  { name: 'Hex Grid',     generate: () => generateHexGrid('#0a0a2e', '#00ff41', 18) },
+  { name: 'Honeycomb',    generate: () => generateHexGrid('#1a1200', '#ffaa00', 14) },
+  { name: 'Tie Dye',      generate: () => generateTieDye(['#ff0000', '#ff8800', '#ffff00', '#00ff00', '#0088ff', '#8800ff']) },
+  { name: 'Lightning',    generate: () => generateLightning('#88ccff', 6) },
+  { name: 'Violet Storm', generate: () => generateLightning('#cc66ff', 4) },
+  { name: 'Crosshatch',   generate: () => generateCrosshatch('#1a1a2e', '#4cc9f0') },
+  { name: 'Sketch',       generate: () => generateCrosshatch('#f5f0e8', '#2a2a2a') },
+  { name: 'Deep Space',   generate: () => generateRadial('#000022', '#000000') },
+  { name: 'Lava',         generate: () => generateGradient(['#000000', '#330000', '#cc3300', '#ff6600', '#ffcc00'], 90) },
+  { name: 'Ice',          generate: () => generateGradient(['#e0f7fa', '#80deea', '#00bcd4', '#006064', '#001a1a'], 135) },
+  { name: 'Infrared',     generate: () => generateGradient(['#000', '#220033', '#880044', '#ff0066', '#ff6699', '#ffffff'], 45) },
+  { name: 'Pastel',       generate: () => generateMosaic(['#ffb3ba', '#ffdfba', '#ffffba', '#baffc9', '#bae1ff'], 20) },
 ];
 
 // Cache generated images

@@ -53,24 +53,27 @@ function fbm(x, y, octaves) {
 }
 
 // --- Color Utility ---
+function _hue2rgb(p, q, t) {
+  if (t < 0) t += 1; if (t > 1) t -= 1;
+  if (t < 1/6) return p + (q-p)*6*t;
+  if (t < 1/2) return q;
+  if (t < 2/3) return p + (q-p)*(2/3-t)*6;
+  return p;
+}
+// Reusable output array to avoid allocation per pixel
+const _rgb = [0, 0, 0];
 function hslToRgb(h, s, l) {
-  let r, g, b;
-  if (s === 0) { r = g = b = l; }
-  else {
-    const hue2rgb = (p, q, t) => {
-      if (t < 0) t += 1; if (t > 1) t -= 1;
-      if (t < 1/6) return p + (q-p)*6*t;
-      if (t < 1/2) return q;
-      if (t < 2/3) return p + (q-p)*(2/3-t)*6;
-      return p;
-    };
+  if (s === 0) {
+    const v = Math.round(l * 255);
+    _rgb[0] = v; _rgb[1] = v; _rgb[2] = v;
+  } else {
     const q = l < 0.5 ? l*(1+s) : l+s-l*s;
     const p = 2*l - q;
-    r = hue2rgb(p, q, h+1/3);
-    g = hue2rgb(p, q, h);
-    b = hue2rgb(p, q, h-1/3);
+    _rgb[0] = Math.round(_hue2rgb(p, q, h+1/3)*255);
+    _rgb[1] = Math.round(_hue2rgb(p, q, h)*255);
+    _rgb[2] = Math.round(_hue2rgb(p, q, h-1/3)*255);
   }
-  return [Math.round(r*255), Math.round(g*255), Math.round(b*255)];
+  return _rgb;
 }
 
 // --- Layer Type Constants ---
@@ -85,7 +88,7 @@ const BLEND_MODES = [
   { value: 'difference', label: 'Difference' },
 ];
 const AUDIO_SOURCES = ['none', 'bass', 'mids', 'highs', 'full'];
-const LAYER_SCALES = { wash: 6, blob: 4, marbling: 5, bubble: 5, image: 3, scope: 1 };
+const LAYER_SCALES = { wash: 8, blob: 6, marbling: 7, bubble: 7, image: 4, scope: 1 };
 
 // --- Layer Param Definitions ---
 const LAYER_PARAMS = [
@@ -97,6 +100,11 @@ const LAYER_PARAMS = [
   { key: 'rotation', label: 'Rotate', min: 0, max: 1, default: 0, step: 0.05 },
   { key: 'distortion', label: 'Distort', min: 0, max: 1, default: 0.3, step: 0.05 },
   { key: 'reactivity', label: 'React', min: 0, max: 2, default: 0.5, step: 0.05 },
+  { key: 'mirror', label: 'Mirror', min: 0, max: 3, default: 0, step: 1 },
+  { key: 'zoom', label: 'Zoom', min: 1, max: 3, default: 1, step: 0.05 },
+  { key: 'invert', label: 'Invert', min: 0, max: 1, default: 0, step: 1 },
+  { key: 'fade', label: 'Fade', min: 0, max: 1, default: 0, step: 0.05 },
+  { key: 'tint', label: 'Tint', min: 0, max: 1, default: 0, step: 0.05 },
 ];
 
 const GLOBAL_PARAMS = [
@@ -109,6 +117,7 @@ const GLOBAL_PARAMS = [
   { key: 'contrast', label: 'Contrast', min: 0, max: 1, default: 0.5, step: 0.05 },
   { key: 'saturation', label: 'Satur', min: 0, max: 1, default: 0.7, step: 0.05 },
   { key: 'journey', label: 'Journey', min: 0, max: 1, default: 0, step: 0.05 },
+  { key: 'grain', label: 'Grain', min: 0, max: 1, default: 0, step: 0.05 },
 ];
 
 const BW_PARAMS = [
@@ -167,6 +176,9 @@ export class LiquidShowVisualizer {
     // Dynamic mode state
     this._dynamicEnabled = false;
     this._dynamicBtn = null;
+
+    // First-visit randomization flag
+    this._hasInitialized = false;
   }
 
   // --- Layer Creation ---
@@ -203,6 +215,96 @@ export class LiquidShowVisualizer {
 
   setParam() {} // No-op — custom panel manages state directly
 
+  // --- Save / Load State ---
+
+  getState() {
+    return {
+      layers: this.layers.map(l => ({
+        type: l.type,
+        visible: l.visible,
+        params: { ...l.params },
+        blendMode: l.blendMode,
+        audioSource: l.audioSource,
+        audioSync: l.audioSync,
+        colorMode: l.colorMode,
+        hue: l.hue,
+        offset: { ...l.offset },
+        imageSrc: l.type === 'image' && l.imageData ? l.imageData.src : undefined,
+      })),
+      selectedLayerIndex: this.selectedLayerIndex,
+      soloLayerIndex: this.soloLayerIndex,
+      globals: { ...this.globals },
+      dynamicEnabled: this._dynamicEnabled,
+    };
+  }
+
+  setState(state) {
+    if (!state) return;
+    this._hasInitialized = true;
+
+    // Restore layers
+    if (state.layers && Array.isArray(state.layers)) {
+      this.layers = state.layers.map(saved => {
+        const layer = this._createLayer(saved.type, {
+          ...saved.params,
+          blendMode: saved.blendMode,
+          audioSource: saved.audioSource,
+          audioSync: saved.audioSync,
+          colorMode: saved.colorMode,
+          hue: saved.hue,
+        });
+        layer.visible = saved.visible;
+        if (saved.offset) layer.offset = { ...saved.offset };
+        // Restore image layers
+        if (saved.type === 'image' && saved.imageSrc) {
+          const img = new Image();
+          img.crossOrigin = 'anonymous';
+          img.src = saved.imageSrc;
+          layer.imageData = img;
+        }
+        return layer;
+      });
+    }
+
+    if (state.selectedLayerIndex !== undefined) this.selectedLayerIndex = state.selectedLayerIndex;
+    if (state.soloLayerIndex !== undefined) this.soloLayerIndex = state.soloLayerIndex;
+
+    // Restore globals
+    if (state.globals) {
+      Object.assign(this.globals, state.globals);
+    }
+
+    // Restore dynamic mode
+    if (state.dynamicEnabled !== undefined) this._dynamicEnabled = state.dynamicEnabled;
+
+    // Reset journey bases so journey modulates around restored values
+    this.journeyBases = null;
+
+    // Rebuild panel UI if it's visible
+    if (this.panelEl) {
+      this._rebuildLayerListFn?.();
+      this._rebuildLayerKnobsFn?.();
+      // Update global knobs
+      this._globalKnobs.forEach(k => {
+        const val = this.globals[k.param.key];
+        if (val !== undefined) {
+          k.value = val;
+          k.baseValue = val;
+          k.updateVisual();
+        }
+      });
+      // Update B&W knobs
+      this._bwKnobs.forEach(k => {
+        const val = this.globals[k.param.key];
+        if (val !== undefined) {
+          k.value = val;
+          k.baseValue = val;
+          k.updateVisual();
+        }
+      });
+    }
+  }
+
   // --- Audio ---
 
   _computeAudio(frequencyData) {
@@ -238,8 +340,17 @@ export class LiquidShowVisualizer {
 
   // --- Layer Renderers ---
 
+  _getImageData(ctx, bw, bh, layer) {
+    // Reuse cached ImageData to avoid allocation every frame
+    if (layer._cachedImageData && layer._cachedImageData.width === bw && layer._cachedImageData.height === bh) {
+      return layer._cachedImageData;
+    }
+    layer._cachedImageData = ctx.createImageData(bw, bh);
+    return layer._cachedImageData;
+  }
+
   _renderWash(layer, ctx, bw, bh, time, audioLevel) {
-    const imageData = ctx.createImageData(bw, bh);
+    const imageData = this._getImageData(ctx, bw, bh, layer);
     const data = imageData.data;
     const { scale, speed, turbulence, drift, rotation, distortion, reactivity } = layer.params;
     const hNorm = layer.hue / 360;
@@ -263,7 +374,7 @@ export class LiquidShowVisualizer {
 
         // Domain warp for organic flow — audio boosts warp intensity
         const warp = fbm(nx * 0.5 + layer.offset.x, ny * 0.5 + layer.offset.y + t * 0.1, 2) * audioDistortion * 2;
-        const val = fbm(nx + warp, ny + warp * 0.8 + t * 0.05, 3);
+        const val = fbm(nx + warp, ny + warp * 0.8 + t * 0.05, 2);
 
         // Turbulence adds high-freq detail
         const detail = turbulence > 0.01 ? noise2D((nx + warp) * 3, (ny + warp) * 3 + t * 0.2) * turbulence * 0.3 : 0;
@@ -282,7 +393,7 @@ export class LiquidShowVisualizer {
   }
 
   _renderBlob(layer, ctx, bw, bh, time, audioLevel) {
-    const imageData = ctx.createImageData(bw, bh);
+    const imageData = this._getImageData(ctx, bw, bh, layer);
     const data = imageData.data;
     const { scale, speed, turbulence, drift, rotation, distortion, reactivity } = layer.params;
     const hNorm = layer.hue / 360;
@@ -330,7 +441,7 @@ export class LiquidShowVisualizer {
   }
 
   _renderMarbling(layer, ctx, bw, bh, time, audioLevel) {
-    const imageData = ctx.createImageData(bw, bh);
+    const imageData = this._getImageData(ctx, bw, bh, layer);
     const data = imageData.data;
     const { scale, speed, turbulence, drift, rotation, distortion, reactivity } = layer.params;
     const hNorm = layer.hue / 360;
@@ -353,10 +464,10 @@ export class LiquidShowVisualizer {
 
         // Domain warping — the signature marbling effect, audio boosts warp
         const ox = layer.offset.x, oy = layer.offset.y;
-        const warpX = fbm(nx + ox, ny + oy + t * 0.05, 3);
-        const warpY = fbm(nx + ox + 5.2, ny + oy + 1.3 + t * 0.04, 3);
+        const warpX = fbm(nx + ox, ny + oy + t * 0.05, 2);
+        const warpY = fbm(nx + ox + 5.2, ny + oy + 1.3 + t * 0.04, 2);
         const dist = audioDist * 4;
-        const val = fbm(nx + warpX * dist + t * 0.02, ny + warpY * dist, 3 + Math.round(audioTurb * 2));
+        const val = fbm(nx + warpX * dist + t * 0.02, ny + warpY * dist, 2 + Math.min(1, Math.round(audioTurb)));
 
         // Second warp pass for extra richness
         const val2 = noise2D((nx + val * 2) * audioTurb, (ny + val * 1.5) * audioTurb + t * 0.03);
@@ -375,7 +486,7 @@ export class LiquidShowVisualizer {
   }
 
   _renderBubble(layer, ctx, bw, bh, time, audioLevel) {
-    const imageData = ctx.createImageData(bw, bh);
+    const imageData = this._getImageData(ctx, bw, bh, layer);
     const data = imageData.data;
     const { scale, speed, turbulence, drift, rotation, distortion, reactivity } = layer.params;
     const hNorm = layer.hue / 360;
@@ -459,7 +570,7 @@ export class LiquidShowVisualizer {
     }
 
     const srcPixels = layer._imgPixels;
-    const imageData = ctx.createImageData(bw, bh);
+    const imageData = this._getImageData(ctx, bw, bh, layer);
     const data = imageData.data;
     const rot = time * rotation * 0.2;
     const cosR = Math.cos(rot), sinR = Math.sin(rot);
@@ -632,6 +743,74 @@ export class LiquidShowVisualizer {
       case 'image': this._renderImage(layer, lCtx, bw, bh, time, audioLevel); break;
       case 'scope': this._renderScope(layer, lCtx, bw, bh, time, audioLevel); break;
     }
+
+    // Apply per-layer post effects
+
+    // Invert
+    if (layer.params.invert >= 0.5) {
+      lCtx.globalCompositeOperation = 'difference';
+      lCtx.fillStyle = '#ffffff';
+      lCtx.fillRect(0, 0, bw, bh);
+      lCtx.globalCompositeOperation = 'source-over';
+    }
+
+    // Mirror (0=off, 1=horizontal, 2=vertical, 3=both)
+    const mirror = Math.round(layer.params.mirror || 0);
+    if (mirror > 0) {
+      if (!this._tmpCanvas) {
+        this._tmpCanvas = document.createElement('canvas');
+      }
+      const tc = this._tmpCanvas;
+      if (tc.width !== bw || tc.height !== bh) { tc.width = bw; tc.height = bh; }
+      const tCtx = tc.getContext('2d');
+      tCtx.clearRect(0, 0, bw, bh);
+      tCtx.drawImage(lCanvas, 0, 0);
+      if (mirror === 1 || mirror === 3) {
+        lCtx.save();
+        lCtx.translate(bw, 0);
+        lCtx.scale(-1, 1);
+        lCtx.drawImage(tc, 0, 0, bw / 2, bh, 0, 0, bw / 2, bh);
+        lCtx.restore();
+      }
+      if (mirror === 2 || mirror === 3) {
+        const src = mirror === 3 ? lCanvas : tc;
+        lCtx.save();
+        lCtx.translate(0, bh);
+        lCtx.scale(1, -1);
+        lCtx.drawImage(src, 0, 0, bw, bh / 2, 0, 0, bw, bh / 2);
+        lCtx.restore();
+      }
+    }
+
+    // Zoom (center crop + scale)
+    const zoom = layer.params.zoom || 1;
+    if (zoom > 1.02) {
+      if (!this._tmpCanvas) {
+        this._tmpCanvas = document.createElement('canvas');
+      }
+      const tc = this._tmpCanvas;
+      if (tc.width !== bw || tc.height !== bh) { tc.width = bw; tc.height = bh; }
+      const tCtx = tc.getContext('2d');
+      tCtx.clearRect(0, 0, bw, bh);
+      tCtx.drawImage(lCanvas, 0, 0);
+      lCtx.clearRect(0, 0, bw, bh);
+      const sw = bw / zoom, sh = bh / zoom;
+      const sx = (bw - sw) / 2, sy = (bh - sh) / 2;
+      lCtx.drawImage(tc, sx, sy, sw, sh, 0, 0, bw, bh);
+    }
+
+    // Tint — overlay the layer's hue color at the tint intensity
+    const tint = layer.params.tint || 0;
+    if (tint > 0.01) {
+      const hue = layer.hue + (layer._jHue || 0);
+      const rgb = hslToRgb((((hue % 360) + 360) % 360) / 360, 1, 0.5);
+      lCtx.globalCompositeOperation = 'color';
+      lCtx.globalAlpha = tint;
+      lCtx.fillStyle = `rgb(${rgb[0]},${rgb[1]},${rgb[2]})`;
+      lCtx.fillRect(0, 0, bw, bh);
+      lCtx.globalAlpha = 1;
+      lCtx.globalCompositeOperation = 'source-over';
+    }
   }
 
   // --- Journey Mode ---
@@ -709,12 +888,41 @@ export class LiquidShowVisualizer {
     }
 
     // Composite
-    this.compCanvas.width = w;
-    this.compCanvas.height = h;
+    if (this.compCanvas.width !== w || this.compCanvas.height !== h) {
+      this.compCanvas.width = w;
+      this.compCanvas.height = h;
+    }
     const compCtx = this.compCtx;
-    compCtx.clearRect(0, 0, w, h);
-    compCtx.fillStyle = '#000';
-    compCtx.fillRect(0, 0, w, h);
+
+    // Check if any active layer uses fade
+    let anyFade = false;
+    for (let i = 0; i < this.layers.length; i++) {
+      if (this._isLayerActive(this.layers[i]) && (this.layers[i].params.fade || 0) > 0.01) {
+        anyFade = true;
+        break;
+      }
+    }
+
+    if (!anyFade) {
+      // No fade — clear and composite fresh
+      compCtx.clearRect(0, 0, w, h);
+      compCtx.fillStyle = '#000';
+      compCtx.fillRect(0, 0, w, h);
+    } else {
+      // Dim previous frame for trails effect (keep previous content, darken it)
+      compCtx.globalCompositeOperation = 'source-over';
+      compCtx.fillStyle = '#000';
+      // Find max fade among active layers to control trail persistence
+      let maxFade = 0;
+      for (let i = 0; i < this.layers.length; i++) {
+        if (this._isLayerActive(this.layers[i])) {
+          maxFade = Math.max(maxFade, this.layers[i].params.fade || 0);
+        }
+      }
+      compCtx.globalAlpha = 1 - maxFade * 0.95; // at fade=1, only 5% darkening per frame = long trails
+      compCtx.fillRect(0, 0, w, h);
+      compCtx.globalAlpha = 1;
+    }
 
     for (let i = 0; i < this.layers.length; i++) {
       const layer = this.layers[i];
@@ -739,7 +947,7 @@ export class LiquidShowVisualizer {
 
   _postProcess(w, h, audio) {
     const ctx = this.ctx;
-    const { bloom, softness, contrast, saturation, bw, threshold, density, bwGlow } = this.globals;
+    const { bloom, softness, contrast, saturation, grain, bw, threshold, density, bwGlow } = this.globals;
 
     // Bloom
     if (bloom > 0.01) {
@@ -793,6 +1001,39 @@ export class LiquidShowVisualizer {
         ctx.globalCompositeOperation = 'source-over';
       }
     }
+
+    // Grain (global — applied once over the final composite)
+    if (grain > 0.01) {
+      // Use a small buffer (1/4 res) for performance, then stretch it
+      const gw = Math.ceil(w / 4), gh = Math.ceil(h / 4);
+      if (!this._grainCanvas) {
+        this._grainCanvas = document.createElement('canvas');
+      }
+      const gc = this._grainCanvas;
+      if (gc.width !== gw || gc.height !== gh) {
+        gc.width = gw; gc.height = gh;
+        this._grainImageData = null;
+      }
+      const gCtx = gc.getContext('2d');
+      if (!this._grainImageData) {
+        this._grainImageData = gCtx.createImageData(gw, gh);
+      }
+      const data = this._grainImageData.data;
+      const intensity = grain * 100;
+      for (let i = 0; i < data.length; i += 4) {
+        const v = (Math.random() - 0.5) * intensity;
+        data[i] = data[i + 1] = data[i + 2] = 128 + v;
+        data[i + 3] = 255;
+      }
+      gCtx.putImageData(this._grainImageData, 0, 0);
+      ctx.globalCompositeOperation = 'overlay';
+      ctx.globalAlpha = grain * 0.5;
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(gc, 0, 0, w, h);
+      ctx.imageSmoothingEnabled = true;
+      ctx.globalAlpha = 1;
+      ctx.globalCompositeOperation = 'source-over';
+    }
   }
 
   reset() {
@@ -812,6 +1053,12 @@ export class LiquidShowVisualizer {
 
   buildPanel(controlPanelEl) {
     this.destroyPanel();
+
+    // Randomize everything on first visit this session
+    if (!this._hasInitialized) {
+      this._hasInitialized = true;
+      this._randomizeAllLayersInternal();
+    }
 
     // Add class to control panel for vertical stacking layout
     controlPanelEl.classList.add('ll-active');
@@ -1380,15 +1627,68 @@ export class LiquidShowVisualizer {
 
   // --- Randomize ---
 
+  // Biased random that favors the middle of the range (less extreme values)
+  _biasedRandom(min, max, center, spread) {
+    // Gaussian-ish: average of 2 randoms biased toward center
+    const r = (Math.random() + Math.random()) / 2; // triangular distribution, peaks at 0.5
+    return min + (max - min) * (center + (r - 0.5) * spread * 2);
+  }
+
+  _randomizeLayerParams(layer) {
+    // Per-param biased ranges — tuned for properly-exposed average
+    const biases = {
+      opacity:    { center: 0.55, spread: 0.6 },   // centered for good exposure
+      reactivity: { center: 0.5, spread: 0.6 },    // moderate-high reactivity
+      distortion: { center: 0.5, spread: 0.65 },
+      scale:      { center: 0.45, spread: 0.7 },
+      mirror:     null,  // uniform is fine for integer params
+      invert:     null,
+      zoom:       { center: 0.25, spread: 0.45 },   // favor lower zoom
+      fade:       { center: 0.15, spread: 0.4 },    // favor low/no fade
+      tint:       { center: 0.25, spread: 0.55 },   // subtle-moderate tint
+    };
+
+    LAYER_PARAMS.forEach(param => {
+      const bias = biases[param.key];
+      let newValue;
+      if (bias) {
+        newValue = this._biasedRandom(param.min, param.max, bias.center, bias.spread);
+      } else {
+        newValue = param.min + Math.random() * (param.max - param.min);
+      }
+      newValue = Math.round(newValue / param.step) * param.step;
+      newValue = Math.max(param.min, Math.min(param.max, newValue));
+      layer.params[param.key] = newValue;
+    });
+
+    layer.hue = Math.random() * 360;
+
+    // Weighted blend modes — balanced for proper exposure on average
+    const blendWeights = [
+      { value: 'source-over', weight: 4 },
+      { value: 'lighter', weight: 2 },
+      { value: 'screen', weight: 4 },
+      { value: 'lighten', weight: 3 },
+      { value: 'multiply', weight: 1 },
+      { value: 'difference', weight: 1 },
+    ];
+    const totalWeight = blendWeights.reduce((s, b) => s + b.weight, 0);
+    let r = Math.random() * totalWeight;
+    for (const b of blendWeights) {
+      r -= b.weight;
+      if (r <= 0) { layer.blendMode = b.value; break; }
+    }
+
+    layer.audioSource = AUDIO_SOURCES[Math.floor(Math.random() * AUDIO_SOURCES.length)];
+  }
+
   _randomizeLayer() {
     const layer = this.layers[this.selectedLayerIndex];
     if (!layer) return;
 
-    // Randomize layer type — include image as a possibility
     const newType = LAYER_TYPES[Math.floor(Math.random() * LAYER_TYPES.length)];
     layer.type = newType;
 
-    // If randomized to image, pick a random gallery image
     if (newType === 'image') {
       const idx = Math.floor(Math.random() * GALLERY_IMAGES.length);
       const img = getGalleryImage(idx);
@@ -1397,30 +1697,16 @@ export class LiquidShowVisualizer {
       layer._imgPixels = null;
     }
 
-    LAYER_PARAMS.forEach(param => {
-      const range = param.max - param.min;
-      let newValue = param.min + Math.random() * range;
-      newValue = Math.round(newValue / param.step) * param.step;
-      newValue = Math.max(param.min, Math.min(param.max, newValue));
-      layer.params[param.key] = newValue;
-    });
-    // Also randomize hue
-    layer.hue = Math.random() * 360;
-    // Also randomize blend mode
-    layer.blendMode = BLEND_MODES[Math.floor(Math.random() * BLEND_MODES.length)].value;
-    // Also randomize audio source
-    layer.audioSource = AUDIO_SOURCES[Math.floor(Math.random() * AUDIO_SOURCES.length)];
+    this._randomizeLayerParams(layer);
     this._rebuildLayerList();
     this._rebuildLayerKnobs();
   }
 
-  _randomizeAllLayers() {
+  _randomizeAllLayersInternal() {
     this.layers.forEach(layer => {
-      // Randomize layer type — include image as a possibility
       const newType = LAYER_TYPES[Math.floor(Math.random() * LAYER_TYPES.length)];
       layer.type = newType;
 
-      // If randomized to image, pick a random gallery image
       if (newType === 'image') {
         const idx = Math.floor(Math.random() * GALLERY_IMAGES.length);
         const img = getGalleryImage(idx);
@@ -1429,17 +1715,19 @@ export class LiquidShowVisualizer {
         layer._imgPixels = null;
       }
 
-      LAYER_PARAMS.forEach(param => {
-        const range = param.max - param.min;
-        let newValue = param.min + Math.random() * range;
-        newValue = Math.round(newValue / param.step) * param.step;
-        newValue = Math.max(param.min, Math.min(param.max, newValue));
-        layer.params[param.key] = newValue;
-      });
-      layer.hue = Math.random() * 360;
-      layer.blendMode = BLEND_MODES[Math.floor(Math.random() * BLEND_MODES.length)].value;
-      layer.audioSource = AUDIO_SOURCES[Math.floor(Math.random() * AUDIO_SOURCES.length)];
+      this._randomizeLayerParams(layer);
     });
+
+    // Randomize global params too
+    GLOBAL_PARAMS.forEach(p => {
+      this.globals[p.key] = p.min + Math.random() * (p.max - p.min);
+      this.globals[p.key] = Math.round(this.globals[p.key] / p.step) * p.step;
+      this.globals[p.key] = Math.max(p.min, Math.min(p.max, this.globals[p.key]));
+    });
+  }
+
+  _randomizeAllLayers() {
+    this._randomizeAllLayersInternal();
     this._rebuildLayerList();
     this._rebuildLayerKnobs();
   }
@@ -1459,7 +1747,7 @@ export class LiquidShowVisualizer {
         k.dynamic = true;
         k.baseValue = k.value;
         k.dynamicPhase = Math.random() * Math.PI * 2;
-        k.dynamicFreq = 0.08 + Math.random() * 0.12;
+        k.dynamicFreq = 0.03 + Math.random() * 0.05;
       } else {
         k.dynamic = false;
         // Snap back to base value
@@ -1480,14 +1768,27 @@ export class LiquidShowVisualizer {
     allKnobs.forEach(k => {
       if (!k.dynamic) return;
       const range = k.param.max - k.param.min;
-      const amplitude = range * 0.2;
-      const offset = Math.sin(time * k.dynamicFreq + k.dynamicPhase) * amplitude;
+      const amplitude = range * 0.12;
+      // Multi-sine for organic motion instead of a single mechanical sine wave
+      const offset = amplitude * (
+        0.6 * Math.sin(time * k.dynamicFreq + k.dynamicPhase) +
+        0.3 * Math.sin(time * k.dynamicFreq * 0.37 + k.dynamicPhase * 1.7) +
+        0.1 * Math.sin(time * k.dynamicFreq * 0.13 + k.dynamicPhase * 2.3)
+      );
+      // Smooth interpolation — don't snap to step grid, let it flow continuously
       let newValue = k.baseValue + offset;
       newValue = Math.max(k.param.min, Math.min(k.param.max, newValue));
-      newValue = Math.round(newValue / k.param.step) * k.param.step;
-      k.value = newValue;
+      // Only snap for integer-step params (like mirror 0-3, invert 0-1)
+      if (k.param.step >= 1) {
+        newValue = Math.round(newValue);
+      }
+      // Smooth toward target to avoid any remaining jitter
+      if (k._smoothValue === undefined) k._smoothValue = newValue;
+      k._smoothValue += (newValue - k._smoothValue) * 0.08;
+      const finalValue = k.param.step >= 1 ? Math.round(k._smoothValue) : k._smoothValue;
+      k.value = finalValue;
       k.updateVisual();
-      k.onChange(newValue);
+      k.onChange(finalValue);
     });
   }
 }
