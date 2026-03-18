@@ -77,8 +77,8 @@ function hslToRgb(h, s, l) {
 }
 
 // --- Layer Type Constants ---
-const LAYER_TYPES = ['wash', 'blob', 'marbling', 'bubble', 'image', 'scope'];
-const LAYER_TYPE_LABELS = { wash: 'Wash', blob: 'Blob', marbling: 'Marbling', bubble: 'Bubble', image: 'Image', scope: 'Scope' };
+const LAYER_TYPES = ['wash', 'blob', 'marbling', 'bubble', 'image', 'scope', 'pulse', 'lissajous'];
+const LAYER_TYPE_LABELS = { wash: 'Wash', blob: 'Blob', marbling: 'Marbling', bubble: 'Bubble', image: 'Image', scope: 'Scope', pulse: 'Pulse', lissajous: 'Lissajous' };
 const BLEND_MODES = [
   { value: 'source-over', label: 'Normal' },
   { value: 'lighter', label: 'Add' },
@@ -88,7 +88,30 @@ const BLEND_MODES = [
   { value: 'difference', label: 'Difference' },
 ];
 const AUDIO_SOURCES = ['none', 'bass', 'mids', 'highs', 'full'];
-const LAYER_SCALES = { wash: 8, blob: 6, marbling: 7, bubble: 7, image: 4, scope: 1 };
+const LAYER_SCALES = { wash: 8, blob: 6, marbling: 7, bubble: 7, image: 4, scope: 1, pulse: 1, lissajous: 1 };
+
+// --- Lissajous Shape Definitions (from lissajous.js) ---
+const LISSAJOUS_SHAPES = [
+  // 1: Dot — audio-reactive point
+  [{ fX: 0, fY: 0, phase: 0, amp: 0 }, { fX: 0, fY: 0, phase: 0, amp: 0 }, { fX: 0, fY: 0, phase: 0, amp: 0 }],
+  // 2: Figure-8
+  [{ fX: 1, fY: 2, phase: Math.PI / 4, amp: 0.9 }, { fX: 0, fY: 0, phase: 0, amp: 0 }, { fX: 0, fY: 0, phase: 0, amp: 0 }],
+  // 3: Bow
+  [{ fX: 2, fY: 3, phase: Math.PI / 3, amp: 0.9 }, { fX: 0, fY: 0, phase: 0, amp: 0 }, { fX: 0, fY: 0, phase: 0, amp: 0 }],
+  // 4: Trefoil
+  [{ fX: 2, fY: 3, phase: Math.PI / 2, amp: 0.65 }, { fX: 3, fY: 2, phase: 0, amp: 0.45 }, { fX: 0, fY: 0, phase: 0, amp: 0 }],
+  // 5: Flower
+  [{ fX: 3, fY: 4, phase: Math.PI / 6, amp: 0.6 }, { fX: 1, fY: 1, phase: Math.PI / 2, amp: 0.45 }, { fX: 0, fY: 0, phase: 0, amp: 0 }],
+  // 6: Spirograph
+  [{ fX: 3, fY: 5, phase: Math.PI / 4, amp: 0.5 }, { fX: 5, fY: 3, phase: Math.PI / 3, amp: 0.35 }, { fX: 1, fY: 2, phase: 0, amp: 0.25 }],
+  // 7: Orbit
+  [{ fX: 1, fY: 1, phase: Math.PI / 2, amp: 0.55 }, { fX: 6, fY: 7, phase: 0, amp: 0.3 }, { fX: 3, fY: 4, phase: Math.PI / 5, amp: 0.2 }],
+  // 8: Star
+  [{ fX: 2, fY: 5, phase: Math.PI / 4, amp: 0.5 }, { fX: 5, fY: 2, phase: Math.PI / 3, amp: 0.4 }, { fX: 3, fY: 7, phase: 0, amp: 0.2 }],
+  // 9: Knot
+  [{ fX: 3, fY: 7, phase: Math.PI / 5, amp: 0.45 }, { fX: 5, fY: 8, phase: Math.PI / 3, amp: 0.35 }, { fX: 7, fY: 11, phase: 0, amp: 0.25 }],
+];
+const LISSAJOUS_SHAPE_LABELS = ['Dot', 'Figure-8', 'Bow', 'Trefoil', 'Flower', 'Spirograph', 'Orbit', 'Star', 'Knot'];
 
 // --- Layer Param Definitions ---
 const LAYER_PARAMS = [
@@ -147,6 +170,7 @@ export class LiquidShowVisualizer {
     // Layer state
     this.layers = this._defaultLayers();
     this.selectedLayerIndex = 0;
+    this.selectedLayerIndices = new Set([0]); // multi-select support
     this.soloLayerIndex = -1;
 
     // Global params
@@ -177,6 +201,15 @@ export class LiquidShowVisualizer {
     this._dynamicEnabled = false;
     this._dynamicBtn = null;
 
+    // Global lock state
+    this._globalLock = false;
+
+    // Undo/redo history
+    this._history = [];
+    this._historyIndex = -1;
+    this._maxHistory = 50;
+    this._historyPaused = false;
+
     // First-visit randomization flag
     this._hasInitialized = false;
   }
@@ -203,6 +236,7 @@ export class LiquidShowVisualizer {
     return {
       type: type || 'wash',
       visible: true,
+      locked: false,
       params,
       blendMode: overrides.blendMode || 'screen',
       audioSource: overrides.audioSource || 'full',
@@ -222,6 +256,7 @@ export class LiquidShowVisualizer {
       layers: this.layers.map(l => ({
         type: l.type,
         visible: l.visible,
+        locked: l.locked,
         params: { ...l.params },
         blendMode: l.blendMode,
         audioSource: l.audioSource,
@@ -230,11 +265,13 @@ export class LiquidShowVisualizer {
         hue: l.hue,
         offset: { ...l.offset },
         imageSrc: l.type === 'image' && l.imageData ? l.imageData.src : undefined,
+        lissajousShape: l.type === 'lissajous' ? (l._lissajousShape || 2) : undefined,
       })),
       selectedLayerIndex: this.selectedLayerIndex,
       soloLayerIndex: this.soloLayerIndex,
       globals: { ...this.globals },
       dynamicEnabled: this._dynamicEnabled,
+      globalLock: this._globalLock,
     };
   }
 
@@ -254,6 +291,7 @@ export class LiquidShowVisualizer {
           hue: saved.hue,
         });
         layer.visible = saved.visible;
+        if (saved.locked !== undefined) layer.locked = saved.locked;
         if (saved.offset) layer.offset = { ...saved.offset };
         // Restore image layers
         if (saved.type === 'image' && saved.imageSrc) {
@@ -262,11 +300,16 @@ export class LiquidShowVisualizer {
           img.src = saved.imageSrc;
           layer.imageData = img;
         }
+        // Restore lissajous shape
+        if (saved.type === 'lissajous' && saved.lissajousShape !== undefined) {
+          layer._lissajousShape = saved.lissajousShape;
+        }
         return layer;
       });
     }
 
     if (state.selectedLayerIndex !== undefined) this.selectedLayerIndex = state.selectedLayerIndex;
+    this.selectedLayerIndices = new Set([this.selectedLayerIndex]);
     if (state.soloLayerIndex !== undefined) this.soloLayerIndex = state.soloLayerIndex;
 
     // Restore globals
@@ -276,6 +319,7 @@ export class LiquidShowVisualizer {
 
     // Restore dynamic mode
     if (state.dynamicEnabled !== undefined) this._dynamicEnabled = state.dynamicEnabled;
+    if (state.globalLock !== undefined) this._globalLock = state.globalLock;
 
     // Reset journey bases so journey modulates around restored values
     this.journeyBases = null;
@@ -732,6 +776,269 @@ export class LiquidShowVisualizer {
     ctx.restore();
   }
 
+  _renderPulse(layer, ctx, w, h, time, audioLevel) {
+    const { scale, speed, turbulence, opacity, drift, rotation, distortion, reactivity } = layer.params;
+    const hNorm = layer.hue / 360;
+    const react = reactivity;
+    const audioMod = audioLevel * react;
+
+    // Persistence — fade previous frame
+    const decay = distortion;
+    if (decay > 0.01) {
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.fillStyle = `rgba(0, 0, 0, ${1 - decay * 0.92})`;
+      ctx.fillRect(0, 0, w, h);
+    } else {
+      ctx.clearRect(0, 0, w, h);
+    }
+
+    // Lazy init per-layer pulse state
+    if (!layer._pulseRings) layer._pulseRings = [];
+    if (!layer._lastPulseTime) layer._lastPulseTime = time;
+
+    const maxR = Math.sqrt((w / 2) ** 2 + (h / 2) ** 2) * 1.1;
+
+    // Ring emission interval: higher scale = denser rings
+    const interval = Math.max(0.05, 0.3 - scale * 0.08);
+    const ringSpeed = 60 + speed * 120 + audioMod * 100;
+    const ringWidth = 1 + distortion * 3 + audioMod * 2;
+
+    // Emit new rings
+    while (time - layer._lastPulseTime >= interval) {
+      layer._lastPulseTime += interval;
+      if (layer._pulseRings.length < 50) {
+        layer._pulseRings.push({
+          born: layer._lastPulseTime,
+          speed: ringSpeed * (0.8 + Math.random() * 0.4),
+          width: ringWidth * (0.7 + Math.random() * 0.6),
+          colorOffset: Math.random() * 0.15,
+          brightness: 0.4 + audioMod * 0.3 + Math.random() * 0.1,
+        });
+      }
+    }
+
+    // Center with drift
+    const driftX = drift * 40 * noise2D(time * 0.12 + layer.offset.x, time * 0.08);
+    const driftY = drift * 40 * noise2D(time * 0.1 + layer.offset.y, time * 0.06 + 5);
+    const cx = w / 2 + driftX;
+    const cy = h / 2 + driftY;
+
+    // Rotation
+    const rot = rotation * Math.PI * 0.5 * Math.sin(time * 0.15);
+
+    ctx.save();
+    if (Math.abs(rot) > 0.001) {
+      ctx.translate(cx, cy);
+      ctx.rotate(rot);
+      ctx.translate(-cx, -cy);
+    }
+
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+
+    // Derive colors from hue
+    const isMono = layer.colorMode === 'mono';
+    const sat = isMono ? 0 : 0.85;
+
+    // Draw rings
+    layer._pulseRings = layer._pulseRings.filter(ring => {
+      const age = time - ring.born;
+      const r = age * ring.speed;
+      if (r > maxR) return false;
+
+      const fade = Math.max(0, 1 - r / maxR);
+      const h360 = ((hNorm + ring.colorOffset) % 1) * 360;
+      const lightness = Math.round(ring.brightness * fade * 100);
+
+      ctx.beginPath();
+      ctx.strokeStyle = `hsla(${h360}, ${Math.round(sat * 100)}%, ${Math.max(5, lightness)}%, ${fade * opacity})`;
+      ctx.lineWidth = ring.width * (1 + fade * 0.5);
+      ctx.shadowBlur = turbulence * 12 * fade + audioMod * 6;
+      ctx.shadowColor = `hsl(${h360}, ${Math.round(sat * 100)}%, ${Math.min(90, lightness + 20)}%)`;
+
+      // Draw distorted circle
+      const segs = 48;
+      for (let s = 0; s <= segs; s++) {
+        const angle = (s / segs) * Math.PI * 2;
+        const distort = turbulence > 0.01
+          ? noise2D(angle * 2 + time * 0.3 + layer.offset.x, r * 0.01 + layer.offset.y) * turbulence * 35
+          : 0;
+        const x = cx + Math.cos(angle) * (r + distort);
+        const y = cy + Math.sin(angle) * (r + distort);
+        if (s === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.closePath();
+      ctx.stroke();
+      return true;
+    });
+
+    // Central glow
+    const glowR = 15 + audioMod * 50;
+    const [gr, gg, gb] = hslToRgb(hNorm, isMono ? 0 : 0.7, 0.6);
+    const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, glowR);
+    grad.addColorStop(0, `rgba(${gr},${gg},${gb},${(0.2 + audioMod * 0.4) * opacity})`);
+    grad.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = grad;
+    ctx.shadowBlur = 0;
+    ctx.fillRect(cx - glowR, cy - glowR, glowR * 2, glowR * 2);
+
+    ctx.shadowBlur = 0;
+    ctx.globalAlpha = 1;
+    ctx.restore();
+  }
+
+  _renderLissajous(layer, ctx, w, h, time, audioLevel) {
+    const { scale, speed, turbulence, opacity, drift, rotation, distortion, reactivity } = layer.params;
+    const hNorm = layer.hue / 360;
+    const react = reactivity;
+    const audioMod = audioLevel * react;
+    const animTime = time * speed;
+
+    // Persistence/decay
+    const decay = distortion;
+    if (decay > 0.01) {
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.fillStyle = `rgba(0, 0, 0, ${1 - decay * 0.95})`;
+      ctx.fillRect(0, 0, w, h);
+    } else {
+      ctx.clearRect(0, 0, w, h);
+    }
+
+    // Shape selection
+    const shapeIdx = Math.max(0, Math.min(LISSAJOUS_SHAPES.length - 1, (layer._lissajousShape || 2) - 1));
+    const shapeOscs = LISSAJOUS_SHAPES[shapeIdx];
+    const isDot = shapeIdx === 0;
+
+    // Derive color
+    const isMono = layer.colorMode === 'mono';
+    const sat = isMono ? 0 : 1;
+    const [cr, cg, cb] = hslToRgb(hNorm, isMono ? 0 : 0.9, 0.55 + audioMod * 0.15);
+    const [gr, gg, gb] = hslToRgb(hNorm, isMono ? 0 : 0.7, 0.7 + audioMod * 0.1);
+    const coreColor = `rgb(${cr},${cg},${cb})`;
+    const glowColor = `rgb(${gr},${gg},${gb})`;
+
+    // Center with drift
+    const driftX = drift * 30 * noise2D(animTime * 0.1 + layer.offset.x, 0);
+    const driftY = drift * 30 * noise2D(0, animTime * 0.1 + layer.offset.y);
+    const cx = w / 2 + driftX;
+    const cy = h / 2 + driftY;
+    const curveScale = Math.min(w, h) * 0.35 * scale;
+
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+
+    if (isDot) {
+      // Dot mode: audio-driven position
+      const bassMove = audioMod * 0.7;
+      const midMove = audioMod * 0.5;
+
+      const dx = bassMove * Math.sin(animTime * 1.3) + midMove * Math.sin(animTime * 3.7 + 1.2);
+      const dy = bassMove * Math.cos(animTime * 0.9 + 0.5) + midMove * Math.cos(animTime * 2.3);
+
+      const px = cx + dx * curveScale;
+      const py = cy + dy * curveScale;
+      const dotR = 4 + audioMod * 12;
+
+      // Glow
+      const grad = ctx.createRadialGradient(px, py, 0, px, py, dotR * 3);
+      grad.addColorStop(0, `rgba(${cr},${cg},${cb},${opacity})`);
+      grad.addColorStop(0.4, `rgba(${gr},${gg},${gb},${opacity * 0.5})`);
+      grad.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = grad;
+      ctx.shadowBlur = turbulence * 30;
+      ctx.shadowColor = glowColor;
+      ctx.fillRect(px - dotR * 3, py - dotR * 3, dotR * 6, dotR * 6);
+
+      // Core dot
+      ctx.beginPath();
+      ctx.arc(px, py, dotR, 0, Math.PI * 2);
+      ctx.fillStyle = coreColor;
+      ctx.globalAlpha = opacity;
+      ctx.fill();
+      ctx.globalAlpha = 1;
+      ctx.shadowBlur = 0;
+      return;
+    }
+
+    // Compute Lissajous points
+    const pointCount = 800;
+    const points = [];
+    const rotSpeed = 0.08 + audioMod * 0.4;
+
+    for (let i = 0; i <= pointCount; i++) {
+      const t = (i / pointCount) * Math.PI * 2;
+      let x = 0, y = 0;
+
+      for (let j = 0; j < shapeOscs.length; j++) {
+        const o = shapeOscs[j];
+        if (o.amp < 0.01) continue;
+
+        // Audio-driven FM
+        const fmX = 1 + audioMod * 1.5 * Math.sin(animTime * 0.7 + j * 2.1);
+        const fmY = 1 + audioMod * 1.5 * Math.cos(animTime * 0.5 + j * 1.7);
+
+        // Phase evolution (rotation controls speed)
+        const phaseEvo = animTime * rotSpeed * (1 + rotation * 3) * (j + 1);
+
+        x += Math.sin(t * o.fX * fmX + o.phase + phaseEvo) * o.amp;
+        y += Math.cos(t * o.fY * fmY + phaseEvo * 1.3) * o.amp;
+      }
+
+      points.push({ x: cx + x * curveScale, y: cy + y * curveScale });
+    }
+
+    // Pass 1: Glow
+    ctx.beginPath();
+    ctx.strokeStyle = `rgba(${cr},${cg},${cb},${opacity * 0.6})`;
+    ctx.lineWidth = 3 + turbulence * 2 + audioMod * 3;
+    ctx.shadowBlur = turbulence * 25;
+    ctx.shadowColor = glowColor;
+
+    for (let i = 0; i <= pointCount; i++) {
+      const p = points[i];
+      // Slight jitter for texture
+      const jX = (Math.random() - 0.5) * 0.5 * (1 + audioMod * 3);
+      const jY = (Math.random() - 0.5) * 0.5 * (1 + audioMod * 3);
+      if (i === 0) ctx.moveTo(p.x + jX, p.y + jY);
+      else ctx.lineTo(p.x + jX, p.y + jY);
+    }
+    ctx.stroke();
+
+    // Pass 2: Core line
+    ctx.beginPath();
+    ctx.strokeStyle = coreColor;
+    ctx.lineWidth = 1.5 + audioMod;
+    ctx.shadowBlur = turbulence * 8;
+    ctx.shadowColor = glowColor;
+    ctx.globalAlpha = opacity;
+
+    for (let i = 0; i <= pointCount; i++) {
+      const p = points[i];
+      if (i === 0) ctx.moveTo(p.x, p.y);
+      else ctx.lineTo(p.x, p.y);
+    }
+    ctx.stroke();
+
+    // Pass 3: Hot white at high audio
+    if (audioMod > 0.1) {
+      ctx.beginPath();
+      ctx.strokeStyle = `hsl(${Math.round(hNorm * 360)}, ${isMono ? 0 : 60}%, 92%)`;
+      ctx.lineWidth = 0.5;
+      ctx.shadowBlur = turbulence * 4;
+      ctx.globalAlpha = audioMod * 0.5 * opacity;
+      for (let i = 0; i <= pointCount; i++) {
+        const p = points[i];
+        if (i === 0) ctx.moveTo(p.x, p.y);
+        else ctx.lineTo(p.x, p.y);
+      }
+      ctx.stroke();
+    }
+
+    ctx.shadowBlur = 0;
+    ctx.globalAlpha = 1;
+  }
+
   _renderLayer(layer, lCanvas, time, audioLevel) {
     const lCtx = lCanvas.getContext('2d');
     const bw = lCanvas.width, bh = lCanvas.height;
@@ -742,6 +1049,8 @@ export class LiquidShowVisualizer {
       case 'bubble': this._renderBubble(layer, lCtx, bw, bh, time, audioLevel); break;
       case 'image': this._renderImage(layer, lCtx, bw, bh, time, audioLevel); break;
       case 'scope': this._renderScope(layer, lCtx, bw, bh, time, audioLevel); break;
+      case 'pulse': this._renderPulse(layer, lCtx, bw, bh, time, audioLevel); break;
+      case 'lissajous': this._renderLissajous(layer, lCtx, bw, bh, time, audioLevel); break;
     }
 
     // Apply per-layer post effects
@@ -1090,44 +1399,58 @@ export class LiquidShowVisualizer {
     const downBtn = this._makeBtn('\u25BC', 'Move Down');
 
     addBtn.addEventListener('click', () => {
+      if (this._globalLock) return;
       if (this.layers.length >= 6) return;
       this.layers.push(this._createLayer('wash'));
-      this._rebuildLayerList();
       this.selectedLayerIndex = this.layers.length - 1;
+      this.selectedLayerIndices = new Set([this.selectedLayerIndex]);
       this._rebuildLayerList();
       this._rebuildLayerKnobs();
+      this._pushHistory();
     });
     dupBtn.addEventListener('click', () => {
+      if (this._globalLock) return;
       if (this.layers.length >= 6) return;
       const src = this.layers[this.selectedLayerIndex];
       const copy = JSON.parse(JSON.stringify(src));
       copy.offset = { x: Math.random() * 1000, y: Math.random() * 1000 };
       this.layers.splice(this.selectedLayerIndex + 1, 0, copy);
       this.selectedLayerIndex++;
+      this.selectedLayerIndices = new Set([this.selectedLayerIndex]);
       this._rebuildLayerList();
       this._rebuildLayerKnobs();
+      this._pushHistory();
     });
     delBtn.addEventListener('click', () => {
+      if (this._globalLock) return;
       if (this.layers.length <= 1) return;
       this.layers.splice(this.selectedLayerIndex, 1);
       if (this.selectedLayerIndex >= this.layers.length) this.selectedLayerIndex = this.layers.length - 1;
       if (this.soloLayerIndex >= this.layers.length) this.soloLayerIndex = -1;
+      this.selectedLayerIndices = new Set([this.selectedLayerIndex]);
       this._rebuildLayerList();
       this._rebuildLayerKnobs();
+      this._pushHistory();
     });
     upBtn.addEventListener('click', () => {
+      if (this._globalLock) return;
       if (this.selectedLayerIndex <= 0) return;
       const i = this.selectedLayerIndex;
       [this.layers[i], this.layers[i-1]] = [this.layers[i-1], this.layers[i]];
       this.selectedLayerIndex--;
+      this.selectedLayerIndices = new Set([this.selectedLayerIndex]);
       this._rebuildLayerList();
+      this._pushHistory();
     });
     downBtn.addEventListener('click', () => {
+      if (this._globalLock) return;
       if (this.selectedLayerIndex >= this.layers.length - 1) return;
       const i = this.selectedLayerIndex;
       [this.layers[i], this.layers[i+1]] = [this.layers[i+1], this.layers[i]];
       this.selectedLayerIndex++;
+      this.selectedLayerIndices = new Set([this.selectedLayerIndex]);
       this._rebuildLayerList();
+      this._pushHistory();
     });
 
     [addBtn, dupBtn, delBtn, upBtn, downBtn].forEach(b => layerButtons.appendChild(b));
@@ -1158,6 +1481,11 @@ export class LiquidShowVisualizer {
     this._rebuildLayerList();
     this._rebuildLayerKnobs();
     this._buildGlobalControls();
+
+    // Seed the undo history with the initial state
+    if (this._history.length === 0) {
+      this._pushHistory();
+    }
   }
 
   destroyPanel() {
@@ -1182,6 +1510,113 @@ export class LiquidShowVisualizer {
     return btn;
   }
 
+  // --- Lock Helpers ---
+
+  _isLayerLocked(layerIndex) {
+    if (this._globalLock) return true;
+    const layer = typeof layerIndex === 'number' ? this.layers[layerIndex] : layerIndex;
+    return layer && layer.locked;
+  }
+
+  // --- Undo/Redo History ---
+
+  _snapshotState() {
+    // Lightweight serializable snapshot of all mutable state
+    return JSON.stringify({
+      layers: this.layers.map(l => ({
+        type: l.type, visible: l.visible, locked: l.locked,
+        params: { ...l.params }, blendMode: l.blendMode,
+        audioSource: l.audioSource, audioSync: l.audioSync,
+        colorMode: l.colorMode, hue: l.hue,
+        offset: { ...l.offset },
+        imageSrc: l.type === 'image' && l.imageData ? l.imageData.src : undefined,
+        lissajousShape: l.type === 'lissajous' ? (l._lissajousShape || 2) : undefined,
+      })),
+      selectedLayerIndex: this.selectedLayerIndex,
+      selectedLayerIndices: [...this.selectedLayerIndices],
+      soloLayerIndex: this.soloLayerIndex,
+      globals: { ...this.globals },
+    });
+  }
+
+  _pushHistory() {
+    if (this._historyPaused) return;
+    const snap = this._snapshotState();
+    // Don't push if identical to current
+    if (this._historyIndex >= 0 && this._history[this._historyIndex] === snap) return;
+    // Truncate any forward history
+    this._history = this._history.slice(0, this._historyIndex + 1);
+    this._history.push(snap);
+    if (this._history.length > this._maxHistory) {
+      this._history.shift();
+    }
+    this._historyIndex = this._history.length - 1;
+    this._updateHistoryButtons();
+  }
+
+  _undo() {
+    if (this._historyIndex <= 0) return;
+    this._historyIndex--;
+    this._restoreSnapshot(this._history[this._historyIndex]);
+    this._updateHistoryButtons();
+  }
+
+  _redo() {
+    if (this._historyIndex >= this._history.length - 1) return;
+    this._historyIndex++;
+    this._restoreSnapshot(this._history[this._historyIndex]);
+    this._updateHistoryButtons();
+  }
+
+  _restoreSnapshot(json) {
+    this._historyPaused = true;
+    const state = JSON.parse(json);
+
+    this.layers = state.layers.map(saved => {
+      const layer = this._createLayer(saved.type, {
+        ...saved.params, blendMode: saved.blendMode,
+        audioSource: saved.audioSource, audioSync: saved.audioSync,
+        colorMode: saved.colorMode, hue: saved.hue,
+      });
+      layer.visible = saved.visible;
+      if (saved.locked !== undefined) layer.locked = saved.locked;
+      if (saved.offset) layer.offset = { ...saved.offset };
+      if (saved.type === 'image' && saved.imageSrc) {
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        img.src = saved.imageSrc;
+        layer.imageData = img;
+      }
+      if (saved.type === 'lissajous' && saved.lissajousShape !== undefined) {
+        layer._lissajousShape = saved.lissajousShape;
+      }
+      return layer;
+    });
+
+    this.selectedLayerIndex = state.selectedLayerIndex;
+    this.selectedLayerIndices = state.selectedLayerIndices
+      ? new Set(state.selectedLayerIndices)
+      : new Set([state.selectedLayerIndex]);
+    this.soloLayerIndex = state.soloLayerIndex;
+    Object.assign(this.globals, state.globals);
+
+    this._rebuildLayerList();
+    this._rebuildLayerKnobs();
+    this._buildGlobalControls();
+    this._historyPaused = false;
+  }
+
+  _updateHistoryButtons() {
+    if (this._undoBtn) {
+      this._undoBtn.disabled = this._historyIndex <= 0;
+      this._undoBtn.style.opacity = this._historyIndex <= 0 ? '0.4' : '1';
+    }
+    if (this._redoBtn) {
+      this._redoBtn.disabled = this._historyIndex >= this._history.length - 1;
+      this._redoBtn.style.opacity = this._historyIndex >= this._history.length - 1 ? '0.4' : '1';
+    }
+  }
+
   // --- Layer List ---
 
   _rebuildLayerList() {
@@ -1191,7 +1626,9 @@ export class LiquidShowVisualizer {
 
     this.layers.forEach((layer, i) => {
       const row = document.createElement('div');
-      row.className = 'll-layer-row' + (i === this.selectedLayerIndex ? ' selected' : '');
+      const isSelected = this.selectedLayerIndices.has(i);
+      const isPrimary = i === this.selectedLayerIndex;
+      row.className = 'll-layer-row' + (isSelected ? ' selected' : '') + (isSelected && !isPrimary ? ' multi-selected' : '');
 
       // Eye toggle
       const eye = document.createElement('button');
@@ -1218,6 +1655,20 @@ export class LiquidShowVisualizer {
         this._rebuildLayerList();
       });
 
+      // Lock toggle
+      const lock = document.createElement('button');
+      lock.className = 'll-lock' + (layer.locked ? ' active' : '');
+      lock.textContent = layer.locked ? '\u{1F512}' : '\u{1F513}';
+      lock.title = 'Lock layer';
+      lock.addEventListener('click', (e) => {
+        e.stopPropagation();
+        layer.locked = !layer.locked;
+        lock.classList.toggle('active', layer.locked);
+        lock.textContent = layer.locked ? '\u{1F512}' : '\u{1F513}';
+        row.classList.toggle('locked', layer.locked);
+        this._rebuildLayerKnobs();
+      });
+
       // Audio sync toggle
       const audioSync = document.createElement('button');
       audioSync.className = 'll-audio-sync' + (layer.audioSync ? ' active' : '');
@@ -1225,6 +1676,7 @@ export class LiquidShowVisualizer {
       audioSync.title = 'Audio Sync';
       audioSync.addEventListener('click', (e) => {
         e.stopPropagation();
+        if (this._isLayerLocked(i)) return;
         layer.audioSync = !layer.audioSync;
         audioSync.classList.toggle('active', layer.audioSync);
       });
@@ -1241,11 +1693,15 @@ export class LiquidShowVisualizer {
       });
       typeSelect.addEventListener('change', (e) => {
         e.stopPropagation();
+        if (this._isLayerLocked(i)) { typeSelect.value = layer.type; return; }
         layer.type = typeSelect.value;
         layer._imgCanvas = null;
         layer._imgPixels = null;
+        layer._pulseRings = null;
+        layer._lastPulseTime = null;
         this._rebuildLayerList();
         this._rebuildLayerKnobs();
+        this._pushHistory();
       });
       typeSelect.addEventListener('click', (e) => e.stopPropagation());
 
@@ -1253,14 +1709,39 @@ export class LiquidShowVisualizer {
       name.className = 'll-layer-name';
       name.textContent = `${i + 1}.`;
 
+      if (layer.locked) row.classList.add('locked');
+
       row.appendChild(eye);
       row.appendChild(solo);
+      row.appendChild(lock);
       row.appendChild(audioSync);
       row.appendChild(name);
       row.appendChild(typeSelect);
 
-      row.addEventListener('click', () => {
-        this.selectedLayerIndex = i;
+      row.addEventListener('click', (e) => {
+        if (e.ctrlKey || e.metaKey) {
+          // Toggle this layer in the multi-selection
+          if (this.selectedLayerIndices.has(i)) {
+            if (this.selectedLayerIndices.size > 1) {
+              this.selectedLayerIndices.delete(i);
+              // Update primary to first remaining
+              this.selectedLayerIndex = [...this.selectedLayerIndices][0];
+            }
+          } else {
+            this.selectedLayerIndices.add(i);
+          }
+        } else if (e.shiftKey && this.selectedLayerIndices.size > 0) {
+          // Range select from primary to clicked
+          const lo = Math.min(this.selectedLayerIndex, i);
+          const hi = Math.max(this.selectedLayerIndex, i);
+          this.selectedLayerIndices.clear();
+          for (let idx = lo; idx <= hi; idx++) this.selectedLayerIndices.add(idx);
+        } else {
+          // Normal click — single select
+          this.selectedLayerIndex = i;
+          this.selectedLayerIndices = new Set([i]);
+        }
+        this.selectedLayerIndex = [...this.selectedLayerIndices][0];
         this._rebuildLayerList();
         this._rebuildLayerKnobs();
       });
@@ -1280,27 +1761,42 @@ export class LiquidShowVisualizer {
     const layer = this.layers[this.selectedLayerIndex];
     if (!layer) return;
 
+    const isMulti = this.selectedLayerIndices.size > 1;
+    const selectedLayers = [...this.selectedLayerIndices].map(i => this.layers[i]).filter(Boolean);
+    const isLocked = this._isLayerLocked(this.selectedLayerIndex);
+    const anyLocked = selectedLayers.some((_, idx) => this._isLayerLocked([...this.selectedLayerIndices][idx]));
+
     // Header
     const header = document.createElement('div');
     header.className = 'll-section-header';
-    header.textContent = `Layer ${this.selectedLayerIndex + 1} — ${LAYER_TYPE_LABELS[layer.type]}`;
+    if (isMulti) {
+      header.textContent = `${selectedLayers.length} Layers Selected` + (anyLocked ? ' \u{1F512}' : '');
+    } else {
+      header.textContent = `Layer ${this.selectedLayerIndex + 1} — ${LAYER_TYPE_LABELS[layer.type]}` + (isLocked ? ' \u{1F512}' : '');
+    }
     container.appendChild(header);
+
+    // Apply locked overlay class to container
+    container.classList.toggle('ll-locked', isMulti ? anyLocked : isLocked);
 
     // Knobs row
     const knobsRow = document.createElement('div');
     knobsRow.className = 'll-knobs-row';
 
-    // Hue knob (stored on layer.hue, not layer.params)
+    // Lock check for knobs
+    const lockCheck = () => isMulti ? anyLocked : this._isLayerLocked(this.selectedLayerIndex);
+
+    // Hue knob — applies to all selected layers
     const hueParam = { key: 'hue', label: 'Hue', min: 0, max: 360, default: 180, step: 1 };
     const hueKnob = this._createKnob(knobsRow, hueParam, layer.hue, (val) => {
-      layer.hue = val;
-    });
+      selectedLayers.forEach(l => { l.hue = val; });
+    }, { lockCheck });
     this._panelKnobs.push(hueKnob);
 
     LAYER_PARAMS.forEach(param => {
       const knobData = this._createKnob(knobsRow, param, layer.params[param.key], (val) => {
-        layer.params[param.key] = val;
-      });
+        selectedLayers.forEach(l => { l.params[param.key] = val; });
+      }, { lockCheck });
       this._panelKnobs.push(knobData);
     });
     container.appendChild(knobsRow);
@@ -1309,31 +1805,41 @@ export class LiquidShowVisualizer {
     const dropRow = document.createElement('div');
     dropRow.className = 'll-dropdowns-row';
 
-    // Blend mode
-    dropRow.appendChild(this._createSelect('Blend', BLEND_MODES.map(b => b.label), BLEND_MODES.findIndex(b => b.value === layer.blendMode), (idx) => {
+    // Blend mode — greyed out in multi-select
+    const blendSelect = this._createSelect('Blend', BLEND_MODES.map(b => b.label), BLEND_MODES.findIndex(b => b.value === layer.blendMode), (idx) => {
+      if (isMulti || this._isLayerLocked(this.selectedLayerIndex)) return;
       layer.blendMode = BLEND_MODES[idx].value;
-    }));
+      this._pushHistory();
+    });
+    if (isMulti) blendSelect.classList.add('ll-disabled');
+    dropRow.appendChild(blendSelect);
 
-    // Audio source
-    dropRow.appendChild(this._createSelect('Audio', AUDIO_SOURCES.map(s => s.charAt(0).toUpperCase() + s.slice(1)), AUDIO_SOURCES.indexOf(layer.audioSource), (idx) => {
+    // Audio source — greyed out in multi-select
+    const audioSelect = this._createSelect('Audio', AUDIO_SOURCES.map(s => s.charAt(0).toUpperCase() + s.slice(1)), AUDIO_SOURCES.indexOf(layer.audioSource), (idx) => {
+      if (isMulti || this._isLayerLocked(this.selectedLayerIndex)) return;
       layer.audioSource = AUDIO_SOURCES[idx];
-    }));
+      this._pushHistory();
+    });
+    if (isMulti) audioSelect.classList.add('ll-disabled');
+    dropRow.appendChild(audioSelect);
 
-    // Color mode toggle
+    // Color mode toggle — greyed out in multi-select
     const colorToggle = document.createElement('button');
-    colorToggle.className = 'll-toggle' + (layer.colorMode === 'mono' ? ' active' : '');
+    colorToggle.className = 'll-toggle' + (layer.colorMode === 'mono' ? ' active' : '') + (isMulti ? ' ll-disabled' : '');
     colorToggle.textContent = layer.colorMode === 'mono' ? 'Mono' : 'Color';
     colorToggle.addEventListener('click', () => {
+      if (isMulti || this._isLayerLocked(this.selectedLayerIndex)) return;
       layer.colorMode = layer.colorMode === 'color' ? 'mono' : 'color';
       colorToggle.classList.toggle('active', layer.colorMode === 'mono');
       colorToggle.textContent = layer.colorMode === 'mono' ? 'Mono' : 'Color';
+      this._pushHistory();
     });
     dropRow.appendChild(colorToggle);
 
     container.appendChild(dropRow);
 
-    // Image upload row (only for image layers)
-    if (layer.type === 'image') {
+    // Image upload row (only for image layers, single-select only)
+    if (layer.type === 'image' && !isMulti) {
       const imgRow = document.createElement('div');
       imgRow.className = 'll-image-row';
 
@@ -1433,6 +1939,38 @@ export class LiquidShowVisualizer {
       container.appendChild(galleryGrid);
     }
 
+    // Lissajous shape selector (only for lissajous layers, single-select only)
+    if (layer.type === 'lissajous' && !isMulti) {
+      const shapeRow = document.createElement('div');
+      shapeRow.className = 'll-image-row';
+      shapeRow.style.gap = '3px';
+
+      const shapeLabel = document.createElement('span');
+      shapeLabel.style.cssText = 'font-size:10px;color:#0f0;margin-right:4px;white-space:nowrap;';
+      shapeLabel.textContent = 'Shape:';
+      shapeRow.appendChild(shapeLabel);
+
+      const currentShape = layer._lissajousShape || 2;
+      LISSAJOUS_SHAPE_LABELS.forEach((label, idx) => {
+        const btn = document.createElement('button');
+        btn.className = 'll-toggle' + ((idx + 1) === currentShape ? ' active' : '');
+        btn.textContent = (idx + 1);
+        btn.title = label;
+        btn.style.cssText = 'min-width:22px;padding:2px 4px;font-size:10px;';
+        btn.addEventListener('click', () => {
+          if (this._isLayerLocked(this.selectedLayerIndex)) return;
+          layer._lissajousShape = idx + 1;
+          shapeRow.querySelectorAll('.ll-toggle').forEach((b, bi) => {
+            b.classList.toggle('active', bi === idx);
+          });
+          this._pushHistory();
+        });
+        shapeRow.appendChild(btn);
+      });
+
+      container.appendChild(shapeRow);
+    }
+
     // Toolbar: Randomize + Randomize All + Dynamic
     const toolbar = document.createElement('div');
     toolbar.className = 'param-toolbar ll-toolbar';
@@ -1441,23 +1979,75 @@ export class LiquidShowVisualizer {
     randomBtn.className = 'param-tool-btn';
     randomBtn.innerHTML = '\u{1F3B2} Randomize';
     randomBtn.title = 'Randomize selected layer';
-    randomBtn.addEventListener('click', () => this._randomizeLayer());
+    randomBtn.addEventListener('click', () => {
+      // Randomize all selected layers
+      for (const idx of this.selectedLayerIndices) {
+        if (this._isLayerLocked(idx)) continue;
+        this.selectedLayerIndex = idx;
+        this._randomizeLayerAt(idx);
+      }
+      this.selectedLayerIndex = [...this.selectedLayerIndices][0];
+      this._rebuildLayerList();
+      this._rebuildLayerKnobs();
+      this._pushHistory();
+    });
 
     const randomAllBtn = document.createElement('button');
     randomAllBtn.className = 'param-tool-btn';
     randomAllBtn.innerHTML = '\u{1F3B2} Randomize All';
     randomAllBtn.title = 'Randomize all layers at once';
-    randomAllBtn.addEventListener('click', () => this._randomizeAllLayers());
+    randomAllBtn.addEventListener('click', () => {
+      if (this._globalLock) return;
+      this._randomizeAllLayers();
+    });
 
     const dynamicBtn = document.createElement('button');
     dynamicBtn.className = 'param-tool-btn' + (this._dynamicEnabled ? ' active' : '');
     dynamicBtn.textContent = '\u2726 Dynamic';
-    dynamicBtn.addEventListener('click', () => this._toggleDynamic());
+    dynamicBtn.addEventListener('click', () => {
+      if (this._globalLock) return;
+      this._toggleDynamic();
+    });
     this._dynamicBtn = dynamicBtn;
 
+    const lockAllBtn = document.createElement('button');
+    lockAllBtn.className = 'param-tool-btn ll-lock-all-btn' + (this._globalLock ? ' active' : '');
+    lockAllBtn.textContent = this._globalLock ? '\u{1F512} Locked' : '\u{1F513} Lock All';
+    lockAllBtn.title = 'Lock all settings (performance mode)';
+    lockAllBtn.addEventListener('click', () => {
+      this._globalLock = !this._globalLock;
+      lockAllBtn.classList.toggle('active', this._globalLock);
+      lockAllBtn.textContent = this._globalLock ? '\u{1F512} Locked' : '\u{1F513} Lock All';
+      container.classList.toggle('ll-locked', this._isLayerLocked(this.selectedLayerIndex));
+      // Update global controls locked state
+      if (this._globalControlsEl) {
+        this._globalControlsEl.classList.toggle('ll-locked', this._globalLock);
+      }
+    });
+
+    // Undo / Redo buttons
+    const undoBtn = document.createElement('button');
+    undoBtn.className = 'param-tool-btn ll-history-btn';
+    undoBtn.innerHTML = '\u25C0 Back';
+    undoBtn.title = 'Undo (go back to previous settings)';
+    undoBtn.addEventListener('click', () => this._undo());
+    this._undoBtn = undoBtn;
+
+    const redoBtn = document.createElement('button');
+    redoBtn.className = 'param-tool-btn ll-history-btn';
+    redoBtn.innerHTML = 'Fwd \u25B6';
+    redoBtn.title = 'Redo (go forward to next settings)';
+    redoBtn.addEventListener('click', () => this._redo());
+    this._redoBtn = redoBtn;
+
+    this._updateHistoryButtons();
+
+    toolbar.appendChild(undoBtn);
+    toolbar.appendChild(redoBtn);
     toolbar.appendChild(randomBtn);
     toolbar.appendChild(randomAllBtn);
     toolbar.appendChild(dynamicBtn);
+    toolbar.appendChild(lockAllBtn);
     container.appendChild(toolbar);
   }
 
@@ -1470,6 +2060,8 @@ export class LiquidShowVisualizer {
     this._globalKnobs = [];
     this._bwKnobs = [];
 
+    container.classList.toggle('ll-locked', this._globalLock);
+
     const header = document.createElement('div');
     header.className = 'll-section-header';
     header.textContent = 'Environment';
@@ -1478,10 +2070,11 @@ export class LiquidShowVisualizer {
     const knobsRow = document.createElement('div');
     knobsRow.className = 'll-knobs-row';
 
+    const globalLockCheck = () => this._globalLock;
     GLOBAL_PARAMS.forEach(param => {
       const knobData = this._createKnob(knobsRow, param, this.globals[param.key], (val) => {
         this.globals[param.key] = val;
-      });
+      }, { lockCheck: globalLockCheck });
       this._globalKnobs.push(knobData);
     });
     container.appendChild(knobsRow);
@@ -1494,6 +2087,7 @@ export class LiquidShowVisualizer {
     bwToggle.className = 'll-toggle ll-bw-toggle' + (this.globals.bw ? ' active' : '');
     bwToggle.textContent = this.globals.bw ? 'B & W' : 'Psychedelic';
     bwToggle.addEventListener('click', () => {
+      if (this._globalLock) return;
       this.globals.bw = !this.globals.bw;
       bwToggle.classList.toggle('active', this.globals.bw);
       bwToggle.textContent = this.globals.bw ? 'B & W' : 'Psychedelic';
@@ -1507,7 +2101,7 @@ export class LiquidShowVisualizer {
     BW_PARAMS.forEach(param => {
       const knobData = this._createKnob(bwKnobsDiv, param, this.globals[param.key], (val) => {
         this.globals[param.key] = val;
-      });
+      }, { lockCheck: globalLockCheck });
       this._bwKnobs.push(knobData);
     });
     bwRow.appendChild(bwKnobsDiv);
@@ -1538,7 +2132,7 @@ export class LiquidShowVisualizer {
     return wrapper;
   }
 
-  _createKnob(container, param, initialValue, onChange) {
+  _createKnob(container, param, initialValue, onChange, opts = {}) {
     const wrapper = document.createElement('div');
     wrapper.className = 'knob-wrapper ll-knob-wrapper';
 
@@ -1583,8 +2177,10 @@ export class LiquidShowVisualizer {
 
     // Drag events
     let startY = 0, startValue = 0;
+    const isLocked = () => opts.lockCheck ? opts.lockCheck() : false;
     const onStart = (e) => {
       e.preventDefault();
+      if (isLocked()) return;
       startY = e.clientY ?? e.touches?.[0]?.clientY ?? 0;
       startValue = knobData.value;
       knob.classList.add('active');
@@ -1612,14 +2208,17 @@ export class LiquidShowVisualizer {
       document.removeEventListener('mouseup', onEnd);
       document.removeEventListener('touchmove', onMove);
       document.removeEventListener('touchend', onEnd);
+      this._pushHistory();
     };
     knob.addEventListener('mousedown', onStart);
     knob.addEventListener('touchstart', onStart, { passive: false });
     knob.addEventListener('dblclick', () => {
+      if (isLocked()) return;
       knobData.value = param.default;
       knobData.baseValue = param.default;
       updateVisual();
       onChange(param.default);
+      this._pushHistory();
     });
 
     return knobData;
@@ -1637,9 +2236,9 @@ export class LiquidShowVisualizer {
   _randomizeLayerParams(layer) {
     // Per-param biased ranges — tuned for properly-exposed average
     const biases = {
-      opacity:    { center: 0.55, spread: 0.6 },   // centered for good exposure
-      reactivity: { center: 0.5, spread: 0.6 },    // moderate-high reactivity
-      distortion: { center: 0.5, spread: 0.65 },
+      opacity:    { center: 0.45, spread: 0.55 },   // pulled down slightly for less blow-out
+      reactivity: { center: 0.4, spread: 0.55 },    // moderate reactivity
+      distortion: { center: 0.4, spread: 0.6 },
       scale:      { center: 0.45, spread: 0.7 },
       mirror:     null,  // uniform is fine for integer params
       invert:     null,
@@ -1665,11 +2264,11 @@ export class LiquidShowVisualizer {
 
     // Weighted blend modes — balanced for proper exposure on average
     const blendWeights = [
-      { value: 'source-over', weight: 4 },
-      { value: 'lighter', weight: 2 },
-      { value: 'screen', weight: 4 },
+      { value: 'source-over', weight: 5 },
+      { value: 'lighter', weight: 1 },
+      { value: 'screen', weight: 3 },
       { value: 'lighten', weight: 3 },
-      { value: 'multiply', weight: 1 },
+      { value: 'multiply', weight: 2 },
       { value: 'difference', weight: 1 },
     ];
     const totalWeight = blendWeights.reduce((s, b) => s + b.weight, 0);
@@ -1682,13 +2281,11 @@ export class LiquidShowVisualizer {
     layer.audioSource = AUDIO_SOURCES[Math.floor(Math.random() * AUDIO_SOURCES.length)];
   }
 
-  _randomizeLayer() {
-    const layer = this.layers[this.selectedLayerIndex];
+  _randomizeLayerAt(layerIndex) {
+    const layer = this.layers[layerIndex];
     if (!layer) return;
-
     const newType = LAYER_TYPES[Math.floor(Math.random() * LAYER_TYPES.length)];
     layer.type = newType;
-
     if (newType === 'image') {
       const idx = Math.floor(Math.random() * GALLERY_IMAGES.length);
       const img = getGalleryImage(idx);
@@ -1696,10 +2293,23 @@ export class LiquidShowVisualizer {
       layer._imgCanvas = null;
       layer._imgPixels = null;
     }
-
+    if (newType === 'lissajous') {
+      layer._lissajousShape = 1 + Math.floor(Math.random() * 9);
+    }
+    if (newType === 'pulse') {
+      layer._pulseRings = null;
+      layer._lastPulseTime = null;
+    }
     this._randomizeLayerParams(layer);
+  }
+
+  _randomizeLayer() {
+    const layer = this.layers[this.selectedLayerIndex];
+    if (!layer) return;
+    this._randomizeLayerAt(this.selectedLayerIndex);
     this._rebuildLayerList();
     this._rebuildLayerKnobs();
+    this._pushHistory();
   }
 
   _randomizeAllLayersInternal() {
@@ -1714,6 +2324,13 @@ export class LiquidShowVisualizer {
         layer._imgCanvas = null;
         layer._imgPixels = null;
       }
+      if (newType === 'lissajous') {
+        layer._lissajousShape = 1 + Math.floor(Math.random() * 9);
+      }
+      if (newType === 'pulse') {
+        layer._pulseRings = null;
+        layer._lastPulseTime = null;
+      }
 
       this._randomizeLayerParams(layer);
     });
@@ -1727,9 +2344,30 @@ export class LiquidShowVisualizer {
   }
 
   _randomizeAllLayers() {
-    this._randomizeAllLayersInternal();
+    // Skip locked layers when called interactively
+    this.layers.forEach(layer => {
+      if (layer.locked) return;
+      const newType = LAYER_TYPES[Math.floor(Math.random() * LAYER_TYPES.length)];
+      layer.type = newType;
+      if (newType === 'image') {
+        const idx = Math.floor(Math.random() * GALLERY_IMAGES.length);
+        const img = getGalleryImage(idx);
+        layer.imageData = img;
+        layer._imgCanvas = null;
+        layer._imgPixels = null;
+      }
+      if (newType === 'lissajous') {
+        layer._lissajousShape = 1 + Math.floor(Math.random() * 9);
+      }
+      if (newType === 'pulse') {
+        layer._pulseRings = null;
+        layer._lastPulseTime = null;
+      }
+      this._randomizeLayerParams(layer);
+    });
     this._rebuildLayerList();
     this._rebuildLayerKnobs();
+    this._pushHistory();
   }
 
   // --- Dynamic Mode ---

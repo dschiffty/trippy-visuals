@@ -130,6 +130,24 @@ export class ControlPanel {
     this.knobsContainer.parentElement.appendChild(toolbar);
   }
 
+  syncValues(values) {
+    // Update control panel knobs to match visualizer's current values
+    this.knobs.forEach((knobData) => {
+      const val = values[knobData.param.key];
+      if (val === undefined) return;
+      knobData.value = val;
+      if (knobData.type !== 'stepper') knobData.baseValue = val;
+      if (knobData.type === 'stepper') {
+        if (knobData.valueEl) {
+          const fmt = knobData.param.formatValue;
+          knobData.valueEl.textContent = fmt ? fmt(val) : val;
+        }
+      } else {
+        this.updateKnobVisual(knobData);
+      }
+    });
+  }
+
   randomize() {
     this.knobs.forEach((knobData) => {
       if (knobData.type === 'stepper') {

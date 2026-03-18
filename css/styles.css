@@ -215,7 +215,9 @@ html, body {
   justify-content: center;
   gap: 10px;
   z-index: 10;
-  background: rgba(0, 0, 0, 0.6);
+  background: rgba(0, 0, 0, 0.65);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
 }
 
 .start-overlay.hidden {
@@ -257,10 +259,11 @@ html, body {
 }
 
 .start-hint {
-  color: rgba(0, 255, 65, 0.4);
+  color: rgba(0, 255, 65, 0.55);
   font-family: 'Courier New', monospace;
   font-size: 11px;
   text-align: center;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.8);
 }
 
 .mobile-warning {
@@ -972,7 +975,7 @@ html, body {
 
 /* --- Layer Stack (left) --- */
 .ll-layers {
-  width: 150px;
+  width: 200px;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
@@ -1011,6 +1014,10 @@ html, body {
   color: #fff;
 }
 
+.ll-layer-row.selected.multi-selected {
+  background: #000060;
+}
+
 .ll-layer-row.selected .ll-layer-name {
   color: #fff;
 }
@@ -1019,6 +1026,11 @@ html, body {
   background: #000080;
   color: #fff;
   border-color: #000080;
+}
+
+.ll-layer-row.selected.multi-selected .ll-type-select {
+  background: #000060;
+  border-color: #000060;
 }
 
 .ll-eye, .ll-solo, .ll-audio-sync {
@@ -1067,6 +1079,8 @@ html, body {
   margin-top: auto;
   padding-top: 4px;
   padding-bottom: 40px;
+  flex-wrap: wrap;
+  gap: 3px 4px;
 }
 
 .ll-image-row {
@@ -1318,4 +1332,106 @@ html, body {
 
 .ll-bw-knobs.visible {
   display: flex;
+}
+
+/* --- Layer Lock --- */
+.ll-lock {
+  width: 18px;
+  height: 16px;
+  font-size: 8px;
+  padding: 0;
+  border: 1px solid #808080;
+  background: #d0d0d0;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  font-family: inherit;
+  color: #666;
+  line-height: 1;
+}
+
+.ll-lock.active {
+  background: #cc8800;
+  color: #fff;
+  border-color: #996600;
+}
+
+.ll-layer-row.locked {
+  background: repeating-linear-gradient(
+    45deg,
+    transparent,
+    transparent 3px,
+    rgba(204, 136, 0, 0.08) 3px,
+    rgba(204, 136, 0, 0.08) 6px
+  );
+}
+
+.ll-layer-row.locked.selected {
+  background: #000080;
+}
+
+/* --- Locked overlay for controls --- */
+.ll-layer-controls.ll-locked,
+.ll-global-controls.ll-locked {
+  position: relative;
+}
+
+.ll-layer-controls.ll-locked::after,
+.ll-global-controls.ll-locked::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(
+    45deg,
+    transparent,
+    transparent 4px,
+    rgba(204, 136, 0, 0.06) 4px,
+    rgba(204, 136, 0, 0.06) 8px
+  );
+  pointer-events: none;
+  z-index: 1;
+}
+
+.ll-layer-controls.ll-locked .knob.ll-knob,
+.ll-global-controls.ll-locked .knob.ll-knob {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.ll-layer-controls.ll-locked .ll-select,
+.ll-layer-controls.ll-locked .ll-toggle,
+.ll-global-controls.ll-locked .ll-select,
+.ll-global-controls.ll-locked .ll-toggle,
+.ll-global-controls.ll-locked .ll-bw-toggle {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* --- Global Lock All Button --- */
+.ll-lock-all-btn.active {
+  background: #cc8800 !important;
+  color: #fff !important;
+  border-top-color: #996600;
+  border-left-color: #996600;
+  border-right-color: #ffcc66;
+  border-bottom-color: #ffcc66;
+  font-weight: bold;
+}
+
+/* --- Disabled elements in multi-select mode --- */
+.ll-disabled {
+  opacity: 0.35 !important;
+  cursor: not-allowed !important;
+  pointer-events: none;
+}
+
+/* --- History buttons --- */
+.ll-history-btn {
+  font-size: 10px !important;
+}
+
+.ll-history-btn:disabled {
+  cursor: not-allowed;
 }

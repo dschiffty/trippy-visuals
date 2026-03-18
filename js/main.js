@@ -33,9 +33,16 @@ class App {
     for (const [key, Cls] of Object.entries(VIZ_CLASSES)) {
       this.visualizers[key] = new Cls(this.canvas);
     }
-    this.activeKey = 'oscilloscope';
+    this.activeKey = 'liquidShow';
     this.previousKey = null;
-    this.activeVisualizer = this.visualizers.oscilloscope;
+    this.activeVisualizer = this.visualizers.liquidShow;
+
+    // Set Lissajous demo defaults: random shape 3-9, multi-color hue
+    const lissajous = this.visualizers.lissajous;
+    if (lissajous) {
+      lissajous.setParam('shape', 3 + Math.floor(Math.random() * 7)); // 3-9
+      lissajous.setParam('hue', 365); // >360 = multi-color mode
+    }
 
     // Controls
     this.controls = new ControlPanel(
@@ -55,12 +62,13 @@ class App {
     this.setupFullscreenBehavior();
     this.setupFpsDropdown();
     this.resizeCanvas();
-    this.drawIdleScreen();
+
+    // Start visual demo immediately so the app feels alive on load
+    this.startAnimation();
 
     // Responsive canvas
     const ro = new ResizeObserver(() => {
       this.resizeCanvas();
-      if (!this.audio.isCapturing) this.drawIdleScreen();
     });
     ro.observe(this.canvas.parentElement);
   }
@@ -74,7 +82,6 @@ class App {
     }));
 
     this.controls.setupPresets(presets, this.activeKey);
-    this.controls.setVisualizer(VIZ_CLASSES[this.activeKey]);
 
     this.controls.onPresetChange = (key) => {
       this.switchPreset(key);
@@ -83,6 +90,9 @@ class App {
     this.controls.onParamChange = (paramKey, value) => {
       this.activeVisualizer.setParam(paramKey, value);
     };
+
+    // Build the initial visualizer panel (supports custom panels like Liquid Lights)
+    this.switchPreset(this.activeKey);
   }
 
   switchPreset(key) {
@@ -111,6 +121,11 @@ class App {
       this.activeVisualizer.buildPanel(document.querySelector('.control-panel'));
     } else {
       this.controls.setVisualizer(VIZ_CLASSES[key]);
+      // Sync control panel knobs to the visualizer's current values
+      // (which may differ from class defaults, e.g. demo mode presets)
+      if (this.activeVisualizer.values) {
+        this.controls.syncValues(this.activeVisualizer.values);
+      }
     }
 
     this.activeVisualizer.reset();
@@ -276,7 +291,8 @@ class App {
       this.overlay.classList.add('hidden');
       this.statusText.textContent = 'Capturing audio';
       this.activeVisualizer.reset();
-      this.startAnimation();
+      // Animation loop is already running from startup; no need to restart
+      if (!this.animationId) this.startAnimation();
     } catch (err) {
       this.statusText.textContent = err.message || 'Capture failed';
     }
@@ -284,13 +300,12 @@ class App {
 
   stopCapture() {
     this.audio.stop();
-    if (this.animationId) {
-      cancelAnimationFrame(this.animationId);
-      this.animationId = null;
-    }
     this.overlay.classList.remove('hidden');
     this.statusText.textContent = 'Stopped';
-    this.drawIdleScreen();
+    // Keep animation loop running so the visual demo plays behind the overlay
+    if (!this.animationId) {
+      this.startAnimation();
+    }
   }
 
   /* ---- Animation ---- */
@@ -318,14 +333,74 @@ class App {
         this.activeVisualizer.updateDynamic(timestamp);
       }
 
-      if (!this.audio.isCapturing) return;
-
-      const frequencyData = this.audio.getFrequencyData();
-      const timeDomainData = this.audio.getTimeDomainData();
+      let frequencyData, timeDomainData;
+      if (this.audio.isCapturing) {
+        frequencyData = this.audio.getFrequencyData();
+        timeDomainData = this.audio.getTimeDomainData();
+      } else {
+        // Generate synthetic "music" data for demo mode
+        const synth = this._generateSyntheticAudio(timestamp);
+        frequencyData = synth.frequency;
+        timeDomainData = synth.timeDomain;
+      }
       this.activeVisualizer.draw(frequencyData, timeDomainData);
     };
 
     this.animationId = requestAnimationFrame(animate);
+  }
+
+  /* ---- Synthetic Audio for Demo Mode ---- */
+
+  _generateSyntheticAudio(timestamp) {
+    const t = timestamp / 1000;
+    const bins = 1024;
+
+    // Reuse typed arrays
+    if (!this._synthFreq) {
+      this._synthFreq = new Uint8Array(bins);
+      this._synthTime = new Uint8Array(bins);
+    }
+    const freq = this._synthFreq;
+    const time = this._synthTime;
+
+    // Simulate music-like frequency spectrum with evolving rhythmic pulses
+    // Slow "beat" envelopes at different rates
+    const beat1 = Math.pow(Math.max(0, Math.sin(t * 2.2)), 4);       // ~132 bpm kick
+    const beat2 = Math.pow(Math.max(0, Math.sin(t * 3.3 + 1)), 3);   // syncopated
+    const beat3 = Math.pow(Math.max(0, Math.sin(t * 1.1)), 2);       // slow swell
+    const shimmer = 0.3 + 0.2 * Math.sin(t * 0.7);                   // ambient drift
+
+    for (let i = 0; i < bins; i++) {
+      const norm = i / bins; // 0..1
+      // Bass: strong low-frequency content pulsing with beat
+      const bass = Math.exp(-norm * 12) * (140 + 100 * beat1);
+      // Mids: broader hump with syncopation
+      const midCenter = 0.08 + 0.03 * Math.sin(t * 0.5);
+      const mids = Math.exp(-Math.pow((norm - midCenter) / 0.06, 2)) * (80 + 90 * beat2);
+      // Highs: sparkly high-frequency content
+      const highs = Math.exp(-Math.pow((norm - 0.3) / 0.15, 2)) * (30 + 50 * shimmer)
+                   + Math.random() * 8 * shimmer;
+      // Ambient noise floor
+      const noise = Math.random() * 3;
+      // Slow overall swell
+      const swell = 0.6 + 0.4 * beat3;
+
+      freq[i] = Math.min(255, Math.max(0, (bass + mids + highs + noise) * swell));
+    }
+
+    // Generate time-domain waveform (simulated audio signal)
+    const amp = 0.3 + 0.25 * beat1 + 0.15 * beat2;
+    for (let i = 0; i < bins; i++) {
+      const phase = (i / bins) * Math.PI * 2;
+      // Mix of sine waves at different frequencies for a rich waveform
+      const wave = Math.sin(phase * 3 + t * 5) * 0.5
+                 + Math.sin(phase * 7 + t * 3.7) * 0.25
+                 + Math.sin(phase * 13 + t * 8.3) * 0.15
+                 + Math.sin(phase * 23 + t * 1.1) * 0.1;
+      time[i] = 128 + Math.round(wave * amp * 127);
+    }
+
+    return { frequency: freq, timeDomain: time };
   }
 
   /* ---- Canvas ---- */
