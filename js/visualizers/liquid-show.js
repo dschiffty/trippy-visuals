@@ -782,6 +782,19 @@ export class LiquidShowVisualizer {
     const react = reactivity;
     const audioMod = audioLevel * react;
 
+    // Per-band audio, respecting the layer's Audio dropdown (none/bass/mids/highs/full)
+    const src = layer.audioSource;
+    const isOff = !layer.audioSync || src === 'none';
+    const bass = isOff ? 0 : (src === 'mids' || src === 'highs') ? 0 : this.smoothBass * react;
+    const energy = isOff ? 0 : audioLevel * react;
+
+    // Beat detection for pulse — bass spikes trigger rings
+    if (!layer._peakBass) layer._peakBass = 0;
+    layer._peakBass *= 0.88;
+    if (bass > layer._peakBass) layer._peakBass = bass;
+    const beat = bass > 0.01 ? bass / Math.max(layer._peakBass, 0.01) : 0;
+    const isBeat = beat > 0.6 && bass > 0.08;
+
     // Persistence — fade previous frame
     const decay = distortion;
     if (decay > 0.01) {
@@ -798,21 +811,23 @@ export class LiquidShowVisualizer {
 
     const maxR = Math.sqrt((w / 2) ** 2 + (h / 2) ** 2) * 1.1;
 
-    // Ring emission interval: higher scale = denser rings
-    const interval = Math.max(0.05, 0.3 - scale * 0.08);
-    const ringSpeed = 60 + speed * 120 + audioMod * 100;
-    const ringWidth = 1 + distortion * 3 + audioMod * 2;
+    // Ring emission: base rate from scale, but audio dramatically increases density
+    const baseInterval = Math.max(0.08, 0.4 - scale * 0.1);
+    const interval = isOff ? baseInterval : Math.max(0.04, baseInterval - energy * 0.25);
+    const ringSpeed = 40 + speed * 100 + energy * 160;
+    const ringWidth = 0.5 + distortion * 2 + bass * 5;
 
-    // Emit new rings
+    // Emit new rings — beat-triggered rings are much stronger
     while (time - layer._lastPulseTime >= interval) {
       layer._lastPulseTime += interval;
       if (layer._pulseRings.length < 50) {
         layer._pulseRings.push({
           born: layer._lastPulseTime,
-          speed: ringSpeed * (0.8 + Math.random() * 0.4),
-          width: ringWidth * (0.7 + Math.random() * 0.6),
+          speed: ringSpeed * (0.8 + Math.random() * 0.4) + (isBeat ? 100 : 0),
+          width: (isBeat ? ringWidth * 2.5 + bass * 6 : ringWidth * (0.5 + Math.random() * 0.5)),
           colorOffset: Math.random() * 0.15,
-          brightness: 0.4 + audioMod * 0.3 + Math.random() * 0.1,
+          brightness: (isBeat ? 0.6 + energy * 0.4 : 0.15 + energy * 0.5) + Math.random() * 0.05,
+          isBeat,
         });
       }
     }
@@ -851,10 +866,12 @@ export class LiquidShowVisualizer {
       const lightness = Math.round(ring.brightness * fade * 100);
 
       ctx.beginPath();
-      ctx.strokeStyle = `hsla(${h360}, ${Math.round(sat * 100)}%, ${Math.max(5, lightness)}%, ${fade * opacity})`;
+      ctx.strokeStyle = `hsla(${h360}, ${Math.round(sat * 100)}%, ${Math.max(5, lightness)}%, ${fade * opacity * (ring.isBeat ? 0.9 : 0.25)})`;
       ctx.lineWidth = ring.width * (1 + fade * 0.5);
-      ctx.shadowBlur = turbulence * 12 * fade + audioMod * 6;
-      ctx.shadowColor = `hsl(${h360}, ${Math.round(sat * 100)}%, ${Math.min(90, lightness + 20)}%)`;
+      ctx.shadowBlur = ring.isBeat
+        ? turbulence * 25 * fade + energy * 15
+        : turbulence * 3 * fade;
+      ctx.shadowColor = `hsl(${h360}, ${Math.round(sat * 100)}%, ${Math.min(90, lightness + 30)}%)`;
 
       // Draw distorted circle
       const segs = 48;
@@ -873,11 +890,13 @@ export class LiquidShowVisualizer {
       return true;
     });
 
-    // Central glow
-    const glowR = 15 + audioMod * 50;
-    const [gr, gg, gb] = hslToRgb(hNorm, isMono ? 0 : 0.7, 0.6);
+    // Central glow — pulses dramatically with beat
+    const glowR = 10 + (isBeat ? bass * 120 : 0) + energy * 50;
+    const glowBright = isBeat ? 0.8 : 0.4;
+    const [gr, gg, gb] = hslToRgb(hNorm, isMono ? 0 : 0.7, glowBright);
     const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, glowR);
-    grad.addColorStop(0, `rgba(${gr},${gg},${gb},${(0.2 + audioMod * 0.4) * opacity})`);
+    grad.addColorStop(0, `rgba(${gr},${gg},${gb},${(isBeat ? 0.7 : 0.1 + energy * 0.3) * opacity})`);
+    grad.addColorStop(0.5, `rgba(${gr},${gg},${gb},${(isBeat ? 0.3 : 0.05) * opacity})`);
     grad.addColorStop(1, 'rgba(0,0,0,0)');
     ctx.fillStyle = grad;
     ctx.shadowBlur = 0;
@@ -895,6 +914,14 @@ export class LiquidShowVisualizer {
     const audioMod = audioLevel * react;
     const animTime = time * speed;
 
+    // Per-band audio, respecting the layer's Audio dropdown (none/bass/mids/highs/full)
+    const src = layer.audioSource;
+    const isOff = !layer.audioSync || src === 'none';
+    const bass   = isOff ? 0 : (src === 'mids' || src === 'highs') ? 0 : this.smoothBass * react;
+    const mid    = isOff ? 0 : (src === 'bass' || src === 'highs') ? 0 : this.smoothMid * react;
+    const treble = isOff ? 0 : (src === 'bass' || src === 'mids')  ? 0 : this.smoothTreble * react;
+    const energy = isOff ? 0 : audioLevel * react;
+
     // Persistence/decay
     const decay = distortion;
     if (decay > 0.01) {
@@ -910,11 +937,10 @@ export class LiquidShowVisualizer {
     const shapeOscs = LISSAJOUS_SHAPES[shapeIdx];
     const isDot = shapeIdx === 0;
 
-    // Derive color
+    // Derive color — brightness pulses with energy
     const isMono = layer.colorMode === 'mono';
-    const sat = isMono ? 0 : 1;
-    const [cr, cg, cb] = hslToRgb(hNorm, isMono ? 0 : 0.9, 0.55 + audioMod * 0.15);
-    const [gr, gg, gb] = hslToRgb(hNorm, isMono ? 0 : 0.7, 0.7 + audioMod * 0.1);
+    const [cr, cg, cb] = hslToRgb(hNorm, isMono ? 0 : 0.9, 0.55 + energy * 0.2);
+    const [gr, gg, gb] = hslToRgb(hNorm, isMono ? 0 : 0.7, 0.7 + energy * 0.15);
     const coreColor = `rgb(${cr},${cg},${cb})`;
     const glowColor = `rgb(${gr},${gg},${gb})`;
 
@@ -923,22 +949,28 @@ export class LiquidShowVisualizer {
     const driftY = drift * 30 * noise2D(0, animTime * 0.1 + layer.offset.y);
     const cx = w / 2 + driftX;
     const cy = h / 2 + driftY;
-    const curveScale = Math.min(w, h) * 0.35 * scale;
+    // Scale pulses with bass
+    const curveScale = Math.min(w, h) * 0.35 * scale * (1 + bass * 0.6);
 
     ctx.lineJoin = 'round';
     ctx.lineCap = 'round';
 
     if (isDot) {
-      // Dot mode: audio-driven position
-      const bassMove = audioMod * 0.7;
-      const midMove = audioMod * 0.5;
+      // Dot mode: each band drives different movement
+      const bassMove = bass * 0.7;
+      const midMove = mid * 0.5;
+      const trebleSpread = treble * 0.12;
 
-      const dx = bassMove * Math.sin(animTime * 1.3) + midMove * Math.sin(animTime * 3.7 + 1.2);
-      const dy = bassMove * Math.cos(animTime * 0.9 + 0.5) + midMove * Math.cos(animTime * 2.3);
+      const dx = bassMove * Math.sin(animTime * 1.3)
+               + midMove * Math.sin(animTime * 3.7 + 1.2)
+               + trebleSpread * Math.sin(animTime * 7);
+      const dy = bassMove * Math.cos(animTime * 0.9 + 0.5)
+               + midMove * Math.cos(animTime * 2.3)
+               + trebleSpread * Math.cos(animTime * 5);
 
       const px = cx + dx * curveScale;
       const py = cy + dy * curveScale;
-      const dotR = 4 + audioMod * 12;
+      const dotR = 4 + energy * 12;
 
       // Glow
       const grad = ctx.createRadialGradient(px, py, 0, px, py, dotR * 3);
@@ -961,10 +993,10 @@ export class LiquidShowVisualizer {
       return;
     }
 
-    // Compute Lissajous points
+    // Compute Lissajous points — bass warps frequencies, mid drives rotation, treble adds shimmer
     const pointCount = 800;
     const points = [];
-    const rotSpeed = 0.08 + audioMod * 0.4;
+    const rotSpeed = 0.08 + mid * 0.6;
 
     for (let i = 0; i <= pointCount; i++) {
       const t = (i / pointCount) * Math.PI * 2;
@@ -974,42 +1006,48 @@ export class LiquidShowVisualizer {
         const o = shapeOscs[j];
         if (o.amp < 0.01) continue;
 
-        // Audio-driven FM
-        const fmX = 1 + audioMod * 1.5 * Math.sin(animTime * 0.7 + j * 2.1);
-        const fmY = 1 + audioMod * 1.5 * Math.cos(animTime * 0.5 + j * 1.7);
+        // Bass-driven frequency modulation — warps the shape
+        const fmX = 1 + bass * 1.5 * Math.sin(animTime * 0.7 + j * 2.1);
+        const fmY = 1 + bass * 1.5 * Math.cos(animTime * 0.5 + j * 1.7);
 
-        // Phase evolution (rotation controls speed)
+        // Treble adds harmonic shimmer
+        const trebleDistort = treble * 0.25 * Math.sin(t * (j + 4) * 2);
+
+        // Phase evolution (rotation knob + mid control speed)
         const phaseEvo = animTime * rotSpeed * (1 + rotation * 3) * (j + 1);
 
-        x += Math.sin(t * o.fX * fmX + o.phase + phaseEvo) * o.amp;
-        y += Math.cos(t * o.fY * fmY + phaseEvo * 1.3) * o.amp;
+        x += Math.sin(t * o.fX * fmX + o.phase + phaseEvo) * (o.amp + trebleDistort);
+        y += Math.cos(t * o.fY * fmY + phaseEvo * 1.3) * (o.amp + trebleDistort);
       }
 
       points.push({ x: cx + x * curveScale, y: cy + y * curveScale });
     }
 
-    // Pass 1: Glow
+    // Dynamic glow scales with energy
+    const dynGlow = turbulence * (1 + energy * 2);
+
+    // Pass 1: Glow — bass drives line width
     ctx.beginPath();
-    ctx.strokeStyle = `rgba(${cr},${cg},${cb},${opacity * 0.6})`;
-    ctx.lineWidth = 3 + turbulence * 2 + audioMod * 3;
-    ctx.shadowBlur = turbulence * 25;
+    ctx.strokeStyle = `rgba(${cr},${cg},${cb},${opacity * (0.5 + energy * 0.4)})`;
+    ctx.lineWidth = 3 + dynGlow * 2 + bass * 4;
+    ctx.shadowBlur = dynGlow * 25;
     ctx.shadowColor = glowColor;
 
     for (let i = 0; i <= pointCount; i++) {
       const p = points[i];
-      // Slight jitter for texture
-      const jX = (Math.random() - 0.5) * 0.5 * (1 + audioMod * 3);
-      const jY = (Math.random() - 0.5) * 0.5 * (1 + audioMod * 3);
+      // Treble-driven jitter for texture
+      const jX = (Math.random() - 0.5) * 0.5 * (1 + treble * 5);
+      const jY = (Math.random() - 0.5) * 0.5 * (1 + treble * 5);
       if (i === 0) ctx.moveTo(p.x + jX, p.y + jY);
       else ctx.lineTo(p.x + jX, p.y + jY);
     }
     ctx.stroke();
 
-    // Pass 2: Core line
+    // Pass 2: Core line — energy drives width
     ctx.beginPath();
     ctx.strokeStyle = coreColor;
-    ctx.lineWidth = 1.5 + audioMod;
-    ctx.shadowBlur = turbulence * 8;
+    ctx.lineWidth = 1.5 + energy;
+    ctx.shadowBlur = dynGlow * 8;
     ctx.shadowColor = glowColor;
     ctx.globalAlpha = opacity;
 
@@ -1020,13 +1058,13 @@ export class LiquidShowVisualizer {
     }
     ctx.stroke();
 
-    // Pass 3: Hot white at high audio
-    if (audioMod > 0.1) {
+    // Pass 3: Hot white at high energy
+    if (energy > 0.1) {
       ctx.beginPath();
       ctx.strokeStyle = `hsl(${Math.round(hNorm * 360)}, ${isMono ? 0 : 60}%, 92%)`;
       ctx.lineWidth = 0.5;
-      ctx.shadowBlur = turbulence * 4;
-      ctx.globalAlpha = audioMod * 0.5 * opacity;
+      ctx.shadowBlur = dynGlow * 4;
+      ctx.globalAlpha = energy * 0.6 * opacity;
       for (let i = 0; i <= pointCount; i++) {
         const p = points[i];
         if (i === 0) ctx.moveTo(p.x, p.y);
