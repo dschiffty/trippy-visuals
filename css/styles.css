@@ -1219,8 +1219,23 @@ html, body {
 .ll-knobs-row {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px 14px;
-  justify-content: center;
+  gap: 6px 10px;
+  justify-content: flex-start;
+}
+
+.ll-knob-group-label {
+  font-size: 8px;
+  color: #0c0;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  opacity: 0.5;
+  writing-mode: vertical-lr;
+  text-orientation: mixed;
+  transform: rotate(180deg);
+  padding: 2px 2px 2px 0;
+  border-right: 1px solid rgba(0, 255, 0, 0.15);
+  margin-right: 2px;
+  align-self: center;
 }
 
 .ll-knob-wrapper {

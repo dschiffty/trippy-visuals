@@ -115,38 +115,45 @@ const LISSAJOUS_SHAPE_LABELS = ['Dot', 'Figure-8', 'Bow', 'Trefoil', 'Flower', '
 
 // --- Layer Param Definitions ---
 const LAYER_PARAMS = [
-  { key: 'scale', label: 'Scale', min: 0.1, max: 3, default: 1, step: 0.1 },
-  { key: 'speed', label: 'Speed', min: 0, max: 2, default: 0.5, step: 0.1 },
-  { key: 'turbulence', label: 'Turb', min: 0, max: 1, default: 0.5, step: 0.05 },
-  { key: 'opacity', label: 'Opacity', min: 0, max: 1, default: 0.8, step: 0.05 },
-  { key: 'drift', label: 'Drift', min: 0, max: 1, default: 0.3, step: 0.05 },
-  { key: 'rotation', label: 'Rotate', min: 0, max: 1, default: 0, step: 0.05 },
-  { key: 'distortion', label: 'Distort', min: 0, max: 1, default: 0.3, step: 0.05 },
-  { key: 'reactivity', label: 'React', min: 0, max: 2, default: 0.5, step: 0.05 },
-  { key: 'mirror', label: 'Mirror', min: 0, max: 3, default: 0, step: 1 },
-  { key: 'zoom', label: 'Zoom', min: 1, max: 3, default: 1, step: 0.05 },
-  { key: 'invert', label: 'Invert', min: 0, max: 1, default: 0, step: 1 },
-  { key: 'fade', label: 'Fade', min: 0, max: 1, default: 0, step: 0.05 },
-  { key: 'tint', label: 'Tint', min: 0, max: 1, default: 0, step: 0.05 },
+  // Core
+  { key: 'scale', label: 'Scale', min: 0.1, max: 3, default: 1, step: 0.1, group: 'Core', tip: 'Size / amplitude of the pattern' },
+  { key: 'speed', label: 'Speed', min: 0, max: 2, default: 0.5, step: 0.1, group: 'Core', tip: 'Animation speed' },
+  { key: 'opacity', label: 'Opacity', min: 0, max: 1, default: 0.8, step: 0.05, group: 'Core', tip: 'Layer transparency' },
+  // Motion
+  { key: 'drift', label: 'Drift', min: 0, max: 1, default: 0.3, step: 0.05, group: 'Motion', tip: 'Organic wandering movement' },
+  { key: 'rotation', label: 'Rotate', min: 0, max: 1, default: 0, step: 0.05, group: 'Motion', tip: 'Rotational animation' },
+  { key: 'zoom', label: 'Zoom', min: 1, max: 3, default: 1, step: 0.05, group: 'Motion', tip: 'Magnification level' },
+  { key: 'mirror', label: 'Mirror', min: 0, max: 3, default: 0, step: 1, group: 'Motion', tip: 'Symmetry reflections (0–3 axes)' },
+  // Effects
+  { key: 'turbulence', label: 'Turb', min: 0, max: 1, default: 0.5, step: 0.05, group: 'Effects', tip: 'Glow and distortion intensity' },
+  { key: 'distortion', label: 'Distort', min: 0, max: 1, default: 0.3, step: 0.05, group: 'Effects', tip: 'Persistence trails / decay' },
+  { key: 'fade', label: 'Fade', min: 0, max: 1, default: 0, step: 0.05, group: 'Effects', tip: 'Edge fade vignette' },
+  { key: 'tint', label: 'Tint', min: 0, max: 1, default: 0, step: 0.05, group: 'Effects', tip: 'Color wash overlay' },
+  { key: 'invert', label: 'Invert', min: 0, max: 1, default: 0, step: 1, group: 'Effects', tip: 'Invert colors' },
+  // Audio
+  { key: 'reactivity', label: 'React', min: 0, max: 2, default: 0.5, step: 0.05, group: 'Audio', tip: 'How much audio affects this layer' },
 ];
 
 const GLOBAL_PARAMS = [
-  { key: 'audioGain', label: 'Audio', min: 0, max: 3, default: 1, step: 0.1 },
-  { key: 'speed', label: 'Speed', min: 0.1, max: 2, default: 0.5, step: 0.1 },
-  { key: 'turbulence', label: 'Turb', min: 0, max: 1, default: 0.5, step: 0.05 },
-  { key: 'interaction', label: 'Interact', min: 0, max: 1, default: 0.5, step: 0.05 },
-  { key: 'bloom', label: 'Bloom', min: 0, max: 1, default: 0.4, step: 0.05 },
-  { key: 'softness', label: 'Soft', min: 0, max: 1, default: 0.3, step: 0.05 },
-  { key: 'contrast', label: 'Contrast', min: 0, max: 1, default: 0.5, step: 0.05 },
-  { key: 'saturation', label: 'Satur', min: 0, max: 1, default: 0.7, step: 0.05 },
-  { key: 'journey', label: 'Journey', min: 0, max: 1, default: 0, step: 0.05 },
-  { key: 'grain', label: 'Grain', min: 0, max: 1, default: 0, step: 0.05 },
+  // Audio
+  { key: 'audioGain', label: 'Audio', min: 0, max: 3, default: 1, step: 0.1, group: 'Audio', tip: 'Master audio sensitivity' },
+  { key: 'speed', label: 'Speed', min: 0.1, max: 2, default: 0.5, step: 0.1, group: 'Audio', tip: 'Global animation speed' },
+  // Visual
+  { key: 'turbulence', label: 'Turb', min: 0, max: 1, default: 0.5, step: 0.05, group: 'Visual', tip: 'Global glow & turbulence' },
+  { key: 'bloom', label: 'Bloom', min: 0, max: 1, default: 0.4, step: 0.05, group: 'Visual', tip: 'Soft light bloom effect' },
+  { key: 'softness', label: 'Soft', min: 0, max: 1, default: 0.3, step: 0.05, group: 'Visual', tip: 'Gaussian blur amount' },
+  { key: 'contrast', label: 'Contrast', min: 0, max: 1, default: 0.5, step: 0.05, group: 'Visual', tip: 'Color contrast intensity' },
+  { key: 'saturation', label: 'Satur', min: 0, max: 1, default: 0.7, step: 0.05, group: 'Visual', tip: 'Color vividness' },
+  // Animate
+  { key: 'interaction', label: 'Interact', min: 0, max: 1, default: 0.5, step: 0.05, group: 'Animate', tip: 'Mouse / touch reactivity' },
+  { key: 'journey', label: 'Journey', min: 0, max: 1, default: 0, step: 0.05, group: 'Animate', tip: 'Auto-evolving parameter drift' },
+  { key: 'grain', label: 'Grain', min: 0, max: 1, default: 0, step: 0.05, group: 'Animate', tip: 'Film grain texture overlay' },
 ];
 
 const BW_PARAMS = [
-  { key: 'threshold', label: 'Thresh', min: 0, max: 1, default: 0.5, step: 0.05 },
-  { key: 'density', label: 'Density', min: 0, max: 1, default: 0.5, step: 0.05 },
-  { key: 'bwGlow', label: 'Glow', min: 0, max: 1, default: 0.5, step: 0.05 },
+  { key: 'threshold', label: 'Thresh', min: 0, max: 1, default: 0.5, step: 0.05, tip: 'Black/white cutoff point' },
+  { key: 'density', label: 'Density', min: 0, max: 1, default: 0.5, step: 0.05, tip: 'Ink density / darkness' },
+  { key: 'bwGlow', label: 'Glow', min: 0, max: 1, default: 0.5, step: 0.05, tip: 'White edge glow intensity' },
 ];
 
 // ============================================
@@ -739,10 +746,10 @@ export class LiquidShowVisualizer {
     // Main waveform trace
     ctx.beginPath();
     ctx.strokeStyle = color;
-    ctx.lineWidth = 2 + audioMod * 2;
+    ctx.lineWidth = 2 + audioMod * 0.5;
     ctx.lineJoin = 'round';
     ctx.lineCap = 'round';
-    ctx.shadowBlur = 4 + glow * 20 + audioMod * 10;
+    ctx.shadowBlur = 4 + glow * 15 + audioMod * 3;
     ctx.shadowColor = glowColor;
 
     for (let i = 0; i < drawCount; i++) {
@@ -939,8 +946,10 @@ export class LiquidShowVisualizer {
 
     // Derive color — brightness pulses with energy
     const isMono = layer.colorMode === 'mono';
-    const [cr, cg, cb] = hslToRgb(hNorm, isMono ? 0 : 0.9, 0.55 + energy * 0.2);
-    const [gr, gg, gb] = hslToRgb(hNorm, isMono ? 0 : 0.7, 0.7 + energy * 0.15);
+    const isMultiColor = layer.hue > 360;
+    const effectiveHNorm = isMultiColor ? ((time * 40) % 360) / 360 : hNorm;
+    const [cr, cg, cb] = hslToRgb(effectiveHNorm, isMono ? 0 : 0.9, 0.55 + energy * 0.08);
+    const [gr, gg, gb] = hslToRgb(effectiveHNorm, isMono ? 0 : 0.7, 0.7 + energy * 0.06);
     const coreColor = `rgb(${cr},${cg},${cb})`;
     const glowColor = `rgb(${gr},${gg},${gb})`;
 
@@ -949,17 +958,17 @@ export class LiquidShowVisualizer {
     const driftY = drift * 30 * noise2D(0, animTime * 0.1 + layer.offset.y);
     const cx = w / 2 + driftX;
     const cy = h / 2 + driftY;
-    // Scale pulses with bass
-    const curveScale = Math.min(w, h) * 0.35 * scale * (1 + bass * 0.6);
+    // Scale pulses gently with bass
+    const curveScale = Math.min(w, h) * 0.35 * scale * (1 + bass * 0.15);
 
     ctx.lineJoin = 'round';
     ctx.lineCap = 'round';
 
     if (isDot) {
-      // Dot mode: each band drives different movement
-      const bassMove = bass * 0.7;
-      const midMove = mid * 0.5;
-      const trebleSpread = treble * 0.12;
+      // Dot mode: each band drives gentle movement
+      const bassMove = bass * 0.2;
+      const midMove = mid * 0.15;
+      const trebleSpread = treble * 0.04;
 
       const dx = bassMove * Math.sin(animTime * 1.3)
                + midMove * Math.sin(animTime * 3.7 + 1.2)
@@ -970,7 +979,7 @@ export class LiquidShowVisualizer {
 
       const px = cx + dx * curveScale;
       const py = cy + dy * curveScale;
-      const dotR = 4 + energy * 12;
+      const dotR = 4 + energy * 4;
 
       // Glow
       const grad = ctx.createRadialGradient(px, py, 0, px, py, dotR * 3);
@@ -996,7 +1005,7 @@ export class LiquidShowVisualizer {
     // Compute Lissajous points — bass warps frequencies, mid drives rotation, treble adds shimmer
     const pointCount = 800;
     const points = [];
-    const rotSpeed = 0.08 + mid * 0.6;
+    const rotSpeed = 0.08 + mid * 0.15;
 
     for (let i = 0; i <= pointCount; i++) {
       const t = (i / pointCount) * Math.PI * 2;
@@ -1006,12 +1015,12 @@ export class LiquidShowVisualizer {
         const o = shapeOscs[j];
         if (o.amp < 0.01) continue;
 
-        // Bass-driven frequency modulation — warps the shape
-        const fmX = 1 + bass * 1.5 * Math.sin(animTime * 0.7 + j * 2.1);
-        const fmY = 1 + bass * 1.5 * Math.cos(animTime * 0.5 + j * 1.7);
+        // Bass-driven frequency modulation — gently warps the shape
+        const fmX = 1 + bass * 0.3 * Math.sin(animTime * 0.7 + j * 2.1);
+        const fmY = 1 + bass * 0.3 * Math.cos(animTime * 0.5 + j * 1.7);
 
-        // Treble adds harmonic shimmer
-        const trebleDistort = treble * 0.25 * Math.sin(t * (j + 4) * 2);
+        // Treble adds subtle harmonic shimmer
+        const trebleDistort = treble * 0.06 * Math.sin(t * (j + 4) * 2);
 
         // Phase evolution (rotation knob + mid control speed)
         const phaseEvo = animTime * rotSpeed * (1 + rotation * 3) * (j + 1);
@@ -1023,48 +1032,91 @@ export class LiquidShowVisualizer {
       points.push({ x: cx + x * curveScale, y: cy + y * curveScale });
     }
 
-    // Dynamic glow scales with energy
-    const dynGlow = turbulence * (1 + energy * 2);
+    // Dynamic glow scales gently with energy
+    const dynGlow = turbulence * (1 + energy * 0.5);
+    const glowWidth = 3 + dynGlow * 1.5 + bass * 1;
+    const coreWidth = 1.5 + energy * 0.4;
+    const segSize = 20; // points per segment for multi-color
 
-    // Pass 1: Glow — bass drives line width
-    ctx.beginPath();
-    ctx.strokeStyle = `rgba(${cr},${cg},${cb},${opacity * (0.5 + energy * 0.4)})`;
-    ctx.lineWidth = 3 + dynGlow * 2 + bass * 4;
-    ctx.shadowBlur = dynGlow * 25;
-    ctx.shadowColor = glowColor;
-
-    for (let i = 0; i <= pointCount; i++) {
-      const p = points[i];
-      // Treble-driven jitter for texture
-      const jX = (Math.random() - 0.5) * 0.5 * (1 + treble * 5);
-      const jY = (Math.random() - 0.5) * 0.5 * (1 + treble * 5);
-      if (i === 0) ctx.moveTo(p.x + jX, p.y + jY);
-      else ctx.lineTo(p.x + jX, p.y + jY);
-    }
-    ctx.stroke();
-
-    // Pass 2: Core line — energy drives width
-    ctx.beginPath();
-    ctx.strokeStyle = coreColor;
-    ctx.lineWidth = 1.5 + energy;
-    ctx.shadowBlur = dynGlow * 8;
-    ctx.shadowColor = glowColor;
-    ctx.globalAlpha = opacity;
-
-    for (let i = 0; i <= pointCount; i++) {
-      const p = points[i];
-      if (i === 0) ctx.moveTo(p.x, p.y);
-      else ctx.lineTo(p.x, p.y);
-    }
-    ctx.stroke();
-
-    // Pass 3: Hot white at high energy
-    if (energy > 0.1) {
+    if (isMultiColor && !isMono) {
+      // Multi-color: draw per-segment with rainbow hue
+      const baseHue = (time * 40) % 360;
+      // Pass 1: Glow segments
+      ctx.lineWidth = glowWidth;
+      ctx.lineJoin = 'round';
+      ctx.lineCap = 'round';
+      for (let s = 0; s < pointCount; s += segSize) {
+        const segHue = (baseHue + (s / pointCount) * 180) % 360;
+        const [sr, sg, sb] = hslToRgb(segHue / 360, 0.9, 0.55);
+        ctx.beginPath();
+        ctx.strokeStyle = `rgba(${sr},${sg},${sb},${opacity * (0.5 + energy * 0.15)})`;
+        ctx.shadowBlur = dynGlow * 15;
+        ctx.shadowColor = `hsl(${segHue}, 70%, 70%)`;
+        for (let i = s; i <= Math.min(s + segSize, pointCount); i++) {
+          const p = points[i];
+          const jX = (Math.random() - 0.5) * 0.3 * (1 + treble * 1.5);
+          const jY = (Math.random() - 0.5) * 0.3 * (1 + treble * 1.5);
+          if (i === s) ctx.moveTo(p.x + jX, p.y + jY);
+          else ctx.lineTo(p.x + jX, p.y + jY);
+        }
+        ctx.stroke();
+      }
+      // Pass 2: Core segments
+      ctx.globalAlpha = opacity;
+      ctx.lineWidth = coreWidth;
+      for (let s = 0; s < pointCount; s += segSize) {
+        const segHue = (baseHue + (s / pointCount) * 180) % 360;
+        ctx.beginPath();
+        ctx.strokeStyle = `hsl(${segHue}, 100%, ${60 + energy * 8}%)`;
+        ctx.shadowBlur = dynGlow * 5;
+        ctx.shadowColor = `hsl(${segHue}, 100%, 70%)`;
+        for (let i = s; i <= Math.min(s + segSize, pointCount); i++) {
+          const p = points[i];
+          if (i === s) ctx.moveTo(p.x, p.y);
+          else ctx.lineTo(p.x, p.y);
+        }
+        ctx.stroke();
+      }
+    } else {
+      // Single color mode
+      // Pass 1: Glow
       ctx.beginPath();
-      ctx.strokeStyle = `hsl(${Math.round(hNorm * 360)}, ${isMono ? 0 : 60}%, 92%)`;
+      ctx.strokeStyle = `rgba(${cr},${cg},${cb},${opacity * (0.5 + energy * 0.15)})`;
+      ctx.lineWidth = glowWidth;
+      ctx.shadowBlur = dynGlow * 15;
+      ctx.shadowColor = glowColor;
+      for (let i = 0; i <= pointCount; i++) {
+        const p = points[i];
+        const jX = (Math.random() - 0.5) * 0.3 * (1 + treble * 1.5);
+        const jY = (Math.random() - 0.5) * 0.3 * (1 + treble * 1.5);
+        if (i === 0) ctx.moveTo(p.x + jX, p.y + jY);
+        else ctx.lineTo(p.x + jX, p.y + jY);
+      }
+      ctx.stroke();
+
+      // Pass 2: Core line
+      ctx.beginPath();
+      ctx.strokeStyle = coreColor;
+      ctx.lineWidth = coreWidth;
+      ctx.shadowBlur = dynGlow * 5;
+      ctx.shadowColor = glowColor;
+      ctx.globalAlpha = opacity;
+      for (let i = 0; i <= pointCount; i++) {
+        const p = points[i];
+        if (i === 0) ctx.moveTo(p.x, p.y);
+        else ctx.lineTo(p.x, p.y);
+      }
+      ctx.stroke();
+    }
+
+    // Pass 3: Subtle hot white at high energy
+    if (energy > 0.3) {
+      const whiteHue = isMultiColor ? ((time * 40) % 360) : Math.round(effectiveHNorm * 360);
+      ctx.beginPath();
+      ctx.strokeStyle = `hsl(${whiteHue}, ${isMono ? 0 : 60}%, 92%)`;
       ctx.lineWidth = 0.5;
-      ctx.shadowBlur = dynGlow * 4;
-      ctx.globalAlpha = energy * 0.6 * opacity;
+      ctx.shadowBlur = dynGlow * 3;
+      ctx.globalAlpha = energy * 0.25 * opacity;
       for (let i = 0; i <= pointCount; i++) {
         const p = points[i];
         if (i === 0) ctx.moveTo(p.x, p.y);
@@ -1824,16 +1876,28 @@ export class LiquidShowVisualizer {
     // Lock check for knobs
     const lockCheck = () => isMulti ? anyLocked : this._isLayerLocked(this.selectedLayerIndex);
 
-    // Hue knob — applies to all selected layers
-    const hueParam = { key: 'hue', label: 'Hue', min: 0, max: 360, default: 180, step: 1 };
-    const hueKnob = this._createKnob(knobsRow, hueParam, layer.hue, (val) => {
-      selectedLayers.forEach(l => { l.hue = val; });
-    }, { lockCheck });
-    this._panelKnobs.push(hueKnob);
+    // Build knobs with group labels
+    const allParams = [
+      { ...{ key: 'hue', label: 'Hue', min: 0, max: 360, default: 180, step: 1, group: 'Core', tip: 'Base color of the layer' }, _isHue: true },
+      ...LAYER_PARAMS,
+    ];
 
-    LAYER_PARAMS.forEach(param => {
-      const knobData = this._createKnob(knobsRow, param, layer.params[param.key], (val) => {
-        selectedLayers.forEach(l => { l.params[param.key] = val; });
+    let lastGroup = null;
+    allParams.forEach(param => {
+      if (param.group && param.group !== lastGroup) {
+        lastGroup = param.group;
+        const groupLabel = document.createElement('div');
+        groupLabel.className = 'll-knob-group-label';
+        groupLabel.textContent = param.group;
+        knobsRow.appendChild(groupLabel);
+      }
+      const value = param._isHue ? layer.hue : layer.params[param.key];
+      const knobData = this._createKnob(knobsRow, param, value, (val) => {
+        if (param._isHue) {
+          selectedLayers.forEach(l => { l.hue = val; });
+        } else {
+          selectedLayers.forEach(l => { l.params[param.key] = val; });
+        }
       }, { lockCheck });
       this._panelKnobs.push(knobData);
     });
@@ -1977,7 +2041,7 @@ export class LiquidShowVisualizer {
       container.appendChild(galleryGrid);
     }
 
-    // Lissajous shape selector (only for lissajous layers, single-select only)
+    // Lissajous shape + color selector (only for lissajous layers, single-select only)
     if (layer.type === 'lissajous' && !isMulti) {
       const shapeRow = document.createElement('div');
       shapeRow.className = 'll-image-row';
@@ -2007,6 +2071,43 @@ export class LiquidShowVisualizer {
       });
 
       container.appendChild(shapeRow);
+
+      // Multi-color toggle
+      const colorRow = document.createElement('div');
+      colorRow.className = 'll-image-row';
+      colorRow.style.gap = '6px';
+
+      const colorLabel = document.createElement('span');
+      colorLabel.style.cssText = 'font-size:10px;color:#0f0;margin-right:4px;white-space:nowrap;';
+      colorLabel.textContent = 'Color:';
+      colorRow.appendChild(colorLabel);
+
+      const isMultiColor = layer.hue > 360;
+      const multiBtn = document.createElement('button');
+      multiBtn.className = 'll-toggle' + (isMultiColor ? ' active' : '');
+      multiBtn.textContent = 'Multi';
+      multiBtn.title = 'Rainbow cycling colors';
+      multiBtn.style.cssText = 'min-width:44px;padding:2px 6px;font-size:10px;';
+      multiBtn.addEventListener('click', () => {
+        if (this._isLayerLocked(this.selectedLayerIndex)) return;
+        if (layer.hue > 360) {
+          layer.hue = layer._savedHue || 180;
+        } else {
+          layer._savedHue = layer.hue;
+          layer.hue = 365;
+        }
+        multiBtn.classList.toggle('active', layer.hue > 360);
+        // Update hue knob display
+        const hueKnobData = this._panelKnobs.find(k => k.param.key === 'hue');
+        if (hueKnobData) {
+          hueKnobData.value = layer.hue;
+          hueKnobData.updateVisual?.(layer.hue);
+        }
+        this._pushHistory();
+      });
+      colorRow.appendChild(multiBtn);
+
+      container.appendChild(colorRow);
     }
 
     // Toolbar: Randomize + Randomize All + Dynamic
@@ -2109,7 +2210,15 @@ export class LiquidShowVisualizer {
     knobsRow.className = 'll-knobs-row';
 
     const globalLockCheck = () => this._globalLock;
+    let lastGlobalGroup = null;
     GLOBAL_PARAMS.forEach(param => {
+      if (param.group && param.group !== lastGlobalGroup) {
+        lastGlobalGroup = param.group;
+        const groupLabel = document.createElement('div');
+        groupLabel.className = 'll-knob-group-label';
+        groupLabel.textContent = param.group;
+        knobsRow.appendChild(groupLabel);
+      }
       const knobData = this._createKnob(knobsRow, param, this.globals[param.key], (val) => {
         this.globals[param.key] = val;
       }, { lockCheck: globalLockCheck });
@@ -2173,6 +2282,7 @@ export class LiquidShowVisualizer {
   _createKnob(container, param, initialValue, onChange, opts = {}) {
     const wrapper = document.createElement('div');
     wrapper.className = 'knob-wrapper ll-knob-wrapper';
+    if (param.tip) wrapper.title = param.tip;
 
     const knob = document.createElement('div');
     knob.className = 'knob ll-knob';
