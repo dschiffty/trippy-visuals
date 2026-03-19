@@ -11,9 +11,10 @@ export class ControlPanel {
 
   setupPresets(presets, defaultPreset) {
     this.presetContainer.innerHTML = '';
-    presets.forEach(({ key, label }) => {
+    presets.forEach(({ key, label, mobileOnly }) => {
       const btn = document.createElement('button');
       btn.className = 'preset-btn';
+      if (mobileOnly) btn.classList.add('mobile-only-mode');
       btn.textContent = label;
       btn.dataset.preset = key;
       if (key === defaultPreset) btn.classList.add('active');

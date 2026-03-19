@@ -556,6 +556,51 @@ html, body {
   background: #b0b0b0;
 }
 
+/* Hide mobile-only modes on desktop */
+@media (min-width: 1024px) {
+  .preset-btn.mobile-only-mode { display: none; }
+}
+
+/* Mobile preview button */
+.mobile-preview-btn {
+  margin-top: 8px;
+}
+
+/* Liquid Lite mobile panel */
+.ll-lite-panel {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 8px 12px;
+  flex-wrap: wrap;
+}
+
+.ll-lite-panel .ll-preset-row {
+  border-bottom: none;
+  margin: 0;
+  padding: 0;
+}
+
+.ll-lite-panel .ll-preset-select {
+  font-size: 14px;
+  padding: 6px 8px;
+}
+
+.ll-lite-randomize {
+  padding: 8px 16px;
+  font-size: 14px;
+  cursor: pointer;
+  touch-action: manipulation;
+  background: #c0c0c0;
+  border: 2px outset #dfdfdf;
+  font-family: inherit;
+}
+
+.ll-lite-randomize:active {
+  border-style: inset;
+}
+
 /* ---- Knobs ---- */
 .knobs-container {
   display: flex;
@@ -1196,6 +1241,20 @@ html, body {
   border-left-color: #404040;
   border-right-color: #ffffff;
   border-bottom-color: #ffffff;
+}
+
+/* --- Saved Presets row --- */
+.ll-preset-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 4px 4px;
+  border-bottom: 1px solid #808080;
+  margin-bottom: 2px;
+}
+
+.ll-preset-select {
+  cursor: pointer;
 }
 
 /* --- Layer Controls (center) --- */

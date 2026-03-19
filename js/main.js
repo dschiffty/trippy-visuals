@@ -6,6 +6,7 @@ import { LissajousVisualizer } from './visualizers/lissajous.js';
 import { LiquidMetalVisualizer } from './visualizers/liquid-metal.js';
 import { LiquidShowVisualizer } from './visualizers/liquid-show.js';
 import { ITunesVisualizer } from './visualizers/itunes.js';
+import { LiquidLiteVisualizer } from './visualizers/liquid-lite.js';
 import { ControlPanel } from './controls.js';
 
 const VIZ_CLASSES = {
@@ -16,6 +17,7 @@ const VIZ_CLASSES = {
   liquidMetal: LiquidMetalVisualizer,
   liquidShow: LiquidShowVisualizer,
   itunes: ITunesVisualizer,
+  liquidLite: LiquidLiteVisualizer,
 };
 
 class App {
@@ -79,6 +81,7 @@ class App {
     const presets = Object.entries(VIZ_CLASSES).map(([key, Cls]) => ({
       key,
       label: Cls.label,
+      mobileOnly: !!Cls.mobileOnly,
     }));
 
     this.controls.setupPresets(presets, this.activeKey);
@@ -112,7 +115,7 @@ class App {
         const target = this.previousKey && this.previousKey !== key ? this.previousKey : 'oscilloscope';
         this.switchPreset(target);
         this.controls.setupPresets(
-          Object.entries(VIZ_CLASSES).map(([k, C]) => ({ key: k, label: C.label })),
+          Object.entries(VIZ_CLASSES).map(([k, C]) => ({ key: k, label: C.label, mobileOnly: !!C.mobileOnly })),
           target,
         );
       };
@@ -145,6 +148,17 @@ class App {
     if (isMobile) {
       document.getElementById('mobile-warning')?.classList.remove('hidden');
       document.getElementById('desktop-content')?.style.setProperty('display', 'none');
+
+      // Mobile preview button — launches Liquid Lite
+      const previewBtn = document.getElementById('mobile-preview-btn');
+      if (previewBtn) {
+        previewBtn.addEventListener('click', () => {
+          this.overlay.classList.add('hidden');
+          this.switchPreset('liquidLite');
+          document.querySelectorAll('.preset-btn').forEach(b => b.classList.remove('active'));
+          document.querySelector('.preset-btn[data-preset="liquidLite"]')?.classList.add('active');
+        });
+      }
     }
 
     // Start button

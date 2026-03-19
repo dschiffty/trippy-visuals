@@ -3,6 +3,7 @@
    ============================================ */
 
 import { GALLERY_IMAGES, getGalleryImage, getGalleryThumbnail } from '../image-gallery.js';
+import { LL_PRESETS } from './ll-presets.js';
 
 // --- Simplex 2D Noise ---
 const F2 = 0.5 * (Math.sqrt(3) - 1);
@@ -162,6 +163,41 @@ const BW_PARAMS = [
 export class LiquidShowVisualizer {
   static get label() { return 'Liquid Lights'; }
   static get params() { return []; }
+  static get presets() { return LL_PRESETS; }
+
+  /**
+   * Build a reusable preset selector element.
+   * @param {function} onSelect - Called with the preset vizState when a preset is chosen
+   * @returns {HTMLElement} A container with label + select dropdown
+   */
+  static buildPresetSelector(onSelect) {
+    const row = document.createElement('div');
+    row.className = 'll-preset-row';
+    const label = document.createElement('label');
+    label.textContent = 'Saved Presets';
+    label.style.cssText = 'font-size:10px;font-weight:bold;color:#000;margin-right:4px;';
+    const select = document.createElement('select');
+    select.className = 'll-preset-select';
+    select.style.cssText = 'font-size:10px;max-width:180px;';
+    const def = document.createElement('option');
+    def.value = '';
+    def.textContent = '\u2014 Select \u2014';
+    select.appendChild(def);
+    LL_PRESETS.forEach(p => {
+      const opt = document.createElement('option');
+      opt.value = p.id;
+      opt.textContent = p.name;
+      select.appendChild(opt);
+    });
+    select.addEventListener('change', () => {
+      const preset = LL_PRESETS.find(p => p.id === select.value);
+      if (preset && onSelect) onSelect(JSON.parse(JSON.stringify(preset.vizState)));
+      select.value = '';
+    });
+    row.appendChild(label);
+    row.appendChild(select);
+    return row;
+  }
 
   constructor(canvas) {
     this.canvas = canvas;
@@ -338,8 +374,8 @@ export class LiquidShowVisualizer {
 
     // Rebuild panel UI if it's visible
     if (this.panelEl) {
-      this._rebuildLayerListFn?.();
-      this._rebuildLayerKnobsFn?.();
+      this._rebuildLayerList();
+      this._rebuildLayerKnobs();
       // Update global knobs
       this._globalKnobs.forEach(k => {
         const val = this.globals[k.param.key];
@@ -1494,6 +1530,40 @@ export class LiquidShowVisualizer {
     const legend = document.createElement('legend');
     legend.textContent = 'Liquid Lights';
     panel.appendChild(legend);
+
+    // --- Saved Presets dropdown ---
+    const presetRow = document.createElement('div');
+    presetRow.className = 'll-preset-row';
+    const presetLabel = document.createElement('label');
+    presetLabel.textContent = 'Saved Presets';
+    presetLabel.style.cssText = 'font-size:10px;font-weight:bold;color:#000;margin-right:4px;';
+    const presetSelect = document.createElement('select');
+    presetSelect.className = 'll-preset-select';
+    presetSelect.style.cssText = 'font-size:10px;max-width:180px;';
+    const defaultOpt = document.createElement('option');
+    defaultOpt.value = '';
+    defaultOpt.textContent = '— Select —';
+    presetSelect.appendChild(defaultOpt);
+    LL_PRESETS.forEach(p => {
+      const opt = document.createElement('option');
+      opt.value = p.id;
+      opt.textContent = p.name;
+      presetSelect.appendChild(opt);
+    });
+    presetSelect.addEventListener('change', () => {
+      const id = presetSelect.value;
+      if (!id) return;
+      const preset = LL_PRESETS.find(p => p.id === id);
+      if (preset) {
+        this.setState(JSON.parse(JSON.stringify(preset.vizState)));
+        this._pushHistory();
+      }
+      // Reset dropdown back to placeholder
+      presetSelect.value = '';
+    });
+    presetRow.appendChild(presetLabel);
+    presetRow.appendChild(presetSelect);
+    panel.appendChild(presetRow);
 
     const layout = document.createElement('div');
     layout.className = 'll-layout';
