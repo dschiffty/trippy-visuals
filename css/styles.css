@@ -566,10 +566,14 @@ html, body {
   .preset-btn.desktop-only-mode { display: none; }
   .title-bar, .menu-bar { display: none !important; }
 
-  /* Maximize canvas on mobile */
+  /* Maximize canvas on mobile — eliminate all gaps and background bleed */
+  html, body {
+    background: #000;
+  }
   .window {
     border: none;
     box-shadow: none;
+    background: #000;
   }
   .main-content {
     padding: 0;
@@ -589,7 +593,7 @@ html, body {
   }
   .control-panel .presets-group {
     border-color: rgba(255,255,255,0.15);
-    padding: 4px 6px 6px;
+    padding: 6px 6px 6px;
     margin: 0;
   }
   .control-panel .presets-group legend {
@@ -638,7 +642,7 @@ html, body {
   }
   .control-panel.ll-active .presets-group {
     border: none;
-    padding: 6px 8px;
+    padding: 8px 8px 6px;
     background: rgba(0, 0, 0, 0.5);
     backdrop-filter: blur(8px);
     -webkit-backdrop-filter: blur(8px);

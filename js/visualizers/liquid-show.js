@@ -192,7 +192,6 @@ export class LiquidShowVisualizer {
     select.addEventListener('change', () => {
       const preset = LL_PRESETS.find(p => p.id === select.value);
       if (preset && onSelect) onSelect(JSON.parse(JSON.stringify(preset.vizState)));
-      select.value = '';
     });
     row.appendChild(label);
     row.appendChild(select);
@@ -1558,8 +1557,6 @@ export class LiquidShowVisualizer {
         this.setState(JSON.parse(JSON.stringify(preset.vizState)));
         this._pushHistory();
       }
-      // Reset dropdown back to placeholder
-      presetSelect.value = '';
     });
     presetRow.appendChild(presetLabel);
     presetRow.appendChild(presetSelect);
