@@ -661,6 +661,7 @@ html, body {
     z-index: 99;
     background: transparent;
     padding: 0;
+    transition: opacity 0.3s ease, transform 0.3s ease;
   }
   .control-panel.ll-active .presets-group {
     border: none;
@@ -671,6 +672,12 @@ html, body {
   }
   .control-panel.ll-active .presets-group legend {
     display: none;
+  }
+  /* Hide UI when user taps canvas */
+  .control-panel.ll-active.ll-ui-hidden {
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(-100%);
   }
 }
 
@@ -694,6 +701,12 @@ html, body {
   background: rgba(0, 0, 0, 0.7);
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
+  transition: opacity 0.3s ease, transform 0.3s ease;
+}
+.ll-lite-panel.ll-ui-hidden {
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(100%);
 }
 
 .ll-lite-panel .ll-preset-row {

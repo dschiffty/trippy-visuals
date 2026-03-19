@@ -48,14 +48,30 @@ export class LiquidLiteVisualizer {
 
     controlPanelEl.appendChild(panel);
     this.panelEl = panel;
+
+    // Tap canvas to toggle UI visibility
+    this._uiHidden = false;
+    this._onCanvasTap = (e) => {
+      // Ignore if the tap is on a UI element (button, select, etc.)
+      if (e.target.closest('.ll-lite-panel, .control-panel button, .control-panel select')) return;
+      this._uiHidden = !this._uiHidden;
+      controlPanelEl.classList.toggle('ll-ui-hidden', this._uiHidden);
+      panel.classList.toggle('ll-ui-hidden', this._uiHidden);
+    };
+    this.canvas.addEventListener('click', this._onCanvasTap);
   }
 
   destroyPanel() {
+    if (this._onCanvasTap) {
+      this.canvas.removeEventListener('click', this._onCanvasTap);
+      this._onCanvasTap = null;
+    }
     if (this.panelEl) {
       this.panelEl.remove();
       this.panelEl = null;
     }
-    this._controlPanelEl?.classList.remove('ll-active');
+    this._controlPanelEl?.classList.remove('ll-active', 'll-ui-hidden');
+    this._uiHidden = false;
   }
 
   // --- Extensibility stubs for future features ---
