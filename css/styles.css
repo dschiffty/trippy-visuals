@@ -959,23 +959,23 @@ html, body {
 }
 
 .control-panel.ll-active .presets-group {
-  padding: 4px 10px 6px;
+  padding: 2px 10px 4px;
 }
 
 .ll-panel {
   flex: 1;
-  padding: 6px 8px 8px !important;
+  padding: 2px 4px 3px !important;
 }
 
 .ll-layout {
   display: flex;
-  gap: 10px;
-  min-height: 120px;
+  gap: 6px;
+  min-height: 80px;
 }
 
 /* --- Layer Stack (left) --- */
 .ll-layers {
-  width: 200px;
+  width: 160px;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
@@ -1077,10 +1077,10 @@ html, body {
 
 .ll-toolbar {
   margin-top: auto;
-  padding-top: 4px;
-  padding-bottom: 40px;
+  padding-top: 2px;
+  padding-bottom: 30px;
   flex-wrap: wrap;
-  gap: 3px 4px;
+  gap: 2px 3px;
 }
 
 .ll-image-row {
@@ -1203,28 +1203,35 @@ html, body {
   flex: 1;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
   min-width: 0;
 }
 
 .ll-section-header {
-  font-size: 10px;
+  font-size: 9px;
   font-weight: bold;
   color: #000;
-  padding: 0 0 2px;
-  border-bottom: 1px solid #808080;
-  margin-bottom: 2px;
+  padding: 0;
+  margin-bottom: 1px;
 }
 
 .ll-knobs-row {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px 10px;
+  gap: 4px 10px;
   justify-content: flex-start;
+  align-items: flex-start;
+}
+
+/* Each group is a horizontal cluster with vertical label */
+.ll-knob-group {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
 }
 
 .ll-knob-group-label {
-  font-size: 8px;
+  font-size: 7px;
   color: #0c0;
   text-transform: uppercase;
   letter-spacing: 1px;
@@ -1232,10 +1239,16 @@ html, body {
   writing-mode: vertical-lr;
   text-orientation: mixed;
   transform: rotate(180deg);
-  padding: 2px 2px 2px 0;
+  padding: 2px 1px;
   border-right: 1px solid rgba(0, 255, 0, 0.15);
-  margin-right: 2px;
+  margin-right: 0;
   align-self: center;
+  line-height: 1;
+}
+
+.ll-knob-group-knobs {
+  display: flex;
+  gap: 4px;
 }
 
 .ll-knob-wrapper {
@@ -1243,41 +1256,63 @@ html, body {
 }
 
 .ll-knob-wrapper .knob-label {
-  font-size: 9px;
+  font-size: 8px;
 }
 
 .ll-knob-wrapper .knob-value {
-  font-size: 9px;
+  font-size: 8px;
 }
 
 /* Smaller knobs for LL panel */
 .knob.ll-knob {
-  width: 34px;
-  height: 34px;
+  width: 32px;
+  height: 32px;
 }
 
 .knob.ll-knob .knob-indicator {
-  height: 9px;
-  top: 4px;
+  height: 8px;
+  top: 3px;
+}
+
+/* Knob tooltip on hover */
+.ll-knob-wrapper[data-tip] {
+  position: relative;
+}
+
+.ll-knob-wrapper[data-tip]:hover::after {
+  content: attr(data-tip);
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(0, 0, 0, 0.85);
+  color: #0f0;
+  font-size: 9px;
+  padding: 2px 6px;
+  border-radius: 3px;
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 100;
+  margin-bottom: 2px;
 }
 
 .ll-dropdowns-row {
   display: flex;
-  gap: 8px;
+  gap: 6px;
   align-items: center;
   flex-wrap: wrap;
-  padding-top: 2px;
+  padding-top: 1px;
 }
 
 .ll-select-wrapper {
   display: flex;
   align-items: center;
-  gap: 3px;
-  font-size: 11px;
+  gap: 2px;
+  font-size: 10px;
 }
 
 .ll-select-wrapper label {
-  font-size: 10px;
+  font-size: 9px;
   font-weight: bold;
   color: #000;
 }
@@ -1320,11 +1355,11 @@ html, body {
 
 /* --- Global Controls (right) --- */
 .ll-global-controls {
-  width: 210px;
+  width: 200px;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
 }
 
 .ll-bw-row {

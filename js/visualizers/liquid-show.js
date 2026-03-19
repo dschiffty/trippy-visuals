@@ -273,6 +273,7 @@ export class LiquidShowVisualizer {
         offset: { ...l.offset },
         imageSrc: l.type === 'image' && l.imageData ? l.imageData.src : undefined,
         lissajousShape: l.type === 'lissajous' ? (l._lissajousShape || 2) : undefined,
+        pulseMode: l.type === 'pulse' ? (l._pulseMode || 'constant') : undefined,
       })),
       selectedLayerIndex: this.selectedLayerIndex,
       soloLayerIndex: this.soloLayerIndex,
@@ -310,6 +311,10 @@ export class LiquidShowVisualizer {
         // Restore lissajous shape
         if (saved.type === 'lissajous' && saved.lissajousShape !== undefined) {
           layer._lissajousShape = saved.lissajousShape;
+        }
+        // Restore pulse mode
+        if (saved.type === 'pulse' && saved.pulseMode !== undefined) {
+          layer._pulseMode = saved.pulseMode;
         }
         return layer;
       });
@@ -720,11 +725,11 @@ export class LiquidShowVisualizer {
     const [gr, gg, gb] = hslToRgb(hNorm, 0.7, 0.75);
     const glowColor = `rgb(${gr},${gg},${gb})`;
 
-    const gain = scale * 1.5; // scale knob = amplitude gain
+    const gain = scale * 1.2; // scale knob = amplitude gain
     const sweep = 0.2 + speed * 3.8; // speed knob = sweep (time compression)
     const glow = turbulence; // turbulence knob = glow amount
     const react = reactivity;
-    const audioMod = audioLevel * react;
+    const audioMod = audioLevel * react * 0.4; // dampened audio response
 
     // Number of samples to draw
     const sampleCount = timeDomain.length;
@@ -746,10 +751,10 @@ export class LiquidShowVisualizer {
     // Main waveform trace
     ctx.beginPath();
     ctx.strokeStyle = color;
-    ctx.lineWidth = 2 + audioMod * 0.5;
+    ctx.lineWidth = 1.5 + audioMod * 0.3;
     ctx.lineJoin = 'round';
     ctx.lineCap = 'round';
-    ctx.shadowBlur = 4 + glow * 15 + audioMod * 3;
+    ctx.shadowBlur = 3 + glow * 10 + audioMod * 1.5;
     ctx.shadowColor = glowColor;
 
     for (let i = 0; i < drawCount; i++) {
@@ -795,12 +800,13 @@ export class LiquidShowVisualizer {
     const bass = isOff ? 0 : (src === 'mids' || src === 'highs') ? 0 : this.smoothBass * react;
     const energy = isOff ? 0 : audioLevel * react;
 
-    // Beat detection for pulse — bass spikes trigger rings
+    // Beat detection — always uses raw bass for reliable beat detection regardless of audio filter
+    const rawBass = isOff ? 0 : this.smoothBass * react;
     if (!layer._peakBass) layer._peakBass = 0;
     layer._peakBass *= 0.88;
-    if (bass > layer._peakBass) layer._peakBass = bass;
-    const beat = bass > 0.01 ? bass / Math.max(layer._peakBass, 0.01) : 0;
-    const isBeat = beat > 0.6 && bass > 0.08;
+    if (rawBass > layer._peakBass) layer._peakBass = rawBass;
+    const beat = rawBass > 0.005 ? rawBass / Math.max(layer._peakBass, 0.01) : 0;
+    const isBeat = beat > 0.55 && rawBass > 0.04;
 
     // Persistence — fade previous frame
     const decay = distortion;
@@ -819,23 +825,43 @@ export class LiquidShowVisualizer {
     const maxR = Math.sqrt((w / 2) ** 2 + (h / 2) ** 2) * 1.1;
 
     // Ring emission: base rate from scale, but audio dramatically increases density
-    const baseInterval = Math.max(0.08, 0.4 - scale * 0.1);
+    const beatOnly = (layer._pulseMode === 'beat');
+    const baseInterval = Math.max(0.08, 0.5 - scale * 0.12);
     const interval = isOff ? baseInterval : Math.max(0.04, baseInterval - energy * 0.25);
-    const ringSpeed = 40 + speed * 100 + energy * 160;
-    const ringWidth = 0.5 + distortion * 2 + bass * 5;
+    const ringSpeed = 25 + speed * 120 + energy * 140;
+    const ringWidth = 0.5 + distortion * 2 + rawBass * 5;
 
-    // Emit new rings — beat-triggered rings are much stronger
-    while (time - layer._lastPulseTime >= interval) {
-      layer._lastPulseTime += interval;
-      if (layer._pulseRings.length < 50) {
-        layer._pulseRings.push({
-          born: layer._lastPulseTime,
-          speed: ringSpeed * (0.8 + Math.random() * 0.4) + (isBeat ? 100 : 0),
-          width: (isBeat ? ringWidth * 2.5 + bass * 6 : ringWidth * (0.5 + Math.random() * 0.5)),
-          colorOffset: Math.random() * 0.15,
-          brightness: (isBeat ? 0.6 + energy * 0.4 : 0.15 + energy * 0.5) + Math.random() * 0.05,
-          isBeat,
-        });
+    // Emit new rings — in beat mode, only emit on beats (burst of 2-4 rings)
+    if (beatOnly) {
+      // Keep lastPulseTime current to avoid burst backlog
+      if (time - layer._lastPulseTime > 0.5) layer._lastPulseTime = time;
+      if (isBeat && layer._pulseRings.length < 50) {
+        const burstCount = 2 + Math.floor(rawBass * 5);
+        for (let b = 0; b < burstCount; b++) {
+          layer._pulseRings.push({
+            born: time - b * 0.012,
+            speed: ringSpeed * (1.0 + Math.random() * 0.3) + 60,
+            width: ringWidth * 2.5 + rawBass * 8 + b * 0.5,
+            colorOffset: Math.random() * 0.15,
+            brightness: 0.6 + energy * 0.4 + Math.random() * 0.05,
+            isBeat: true,
+          });
+        }
+      }
+    } else {
+      // Constant mode — emit rings at regular interval
+      while (time - layer._lastPulseTime >= interval) {
+        layer._lastPulseTime += interval;
+        if (layer._pulseRings.length < 50) {
+          layer._pulseRings.push({
+            born: layer._lastPulseTime,
+            speed: ringSpeed * (0.8 + Math.random() * 0.4) + (isBeat ? 80 : 0),
+            width: (isBeat ? ringWidth * 2.5 + rawBass * 6 : ringWidth * (0.5 + Math.random() * 0.5)),
+            colorOffset: Math.random() * 0.15,
+            brightness: (isBeat ? 0.6 + energy * 0.4 : 0.15 + energy * 0.5) + Math.random() * 0.05,
+            isBeat,
+          });
+        }
       }
     }
 
@@ -921,13 +947,13 @@ export class LiquidShowVisualizer {
     const audioMod = audioLevel * react;
     const animTime = time * speed;
 
-    // Per-band audio, respecting the layer's Audio dropdown (none/bass/mids/highs/full)
-    const src = layer.audioSource;
-    const isOff = !layer.audioSync || src === 'none';
-    const bass   = isOff ? 0 : (src === 'mids' || src === 'highs') ? 0 : this.smoothBass * react;
-    const mid    = isOff ? 0 : (src === 'bass' || src === 'highs') ? 0 : this.smoothMid * react;
-    const treble = isOff ? 0 : (src === 'bass' || src === 'mids')  ? 0 : this.smoothTreble * react;
-    const energy = isOff ? 0 : audioLevel * react;
+    // Audio — respect the layer's Audio dropdown; scale down for gentle response
+    const aLev = audioLevel * react;
+    // Dampen heavily: at low react, almost no response; at max react, moderate response
+    const bass   = aLev * 0.4;
+    const mid    = aLev * 0.35;
+    const treble = aLev * 0.25;
+    const energy = aLev * 0.3;
 
     // Persistence/decay
     const decay = distortion;
@@ -944,12 +970,12 @@ export class LiquidShowVisualizer {
     const shapeOscs = LISSAJOUS_SHAPES[shapeIdx];
     const isDot = shapeIdx === 0;
 
-    // Derive color — brightness pulses with energy
+    // Derive color — brightness pulses gently with energy
     const isMono = layer.colorMode === 'mono';
     const isMultiColor = layer.hue > 360;
-    const effectiveHNorm = isMultiColor ? ((time * 40) % 360) / 360 : hNorm;
-    const [cr, cg, cb] = hslToRgb(effectiveHNorm, isMono ? 0 : 0.9, 0.55 + energy * 0.08);
-    const [gr, gg, gb] = hslToRgb(effectiveHNorm, isMono ? 0 : 0.7, 0.7 + energy * 0.06);
+    const effectiveHNorm = isMultiColor ? ((time * 20) % 360) / 360 : hNorm;
+    const [cr, cg, cb] = hslToRgb(effectiveHNorm, isMono ? 0 : 0.9, 0.55 + energy * 0.04);
+    const [gr, gg, gb] = hslToRgb(effectiveHNorm, isMono ? 0 : 0.7, 0.7 + energy * 0.03);
     const coreColor = `rgb(${cr},${cg},${cb})`;
     const glowColor = `rgb(${gr},${gg},${gb})`;
 
@@ -958,17 +984,17 @@ export class LiquidShowVisualizer {
     const driftY = drift * 30 * noise2D(0, animTime * 0.1 + layer.offset.y);
     const cx = w / 2 + driftX;
     const cy = h / 2 + driftY;
-    // Scale pulses gently with bass
-    const curveScale = Math.min(w, h) * 0.35 * scale * (1 + bass * 0.15);
+    // Scale pulses very gently with bass
+    const curveScale = Math.min(w, h) * 0.35 * scale * (1 + bass * 0.08);
 
     ctx.lineJoin = 'round';
     ctx.lineCap = 'round';
 
     if (isDot) {
-      // Dot mode: each band drives gentle movement
-      const bassMove = bass * 0.2;
-      const midMove = mid * 0.15;
-      const trebleSpread = treble * 0.04;
+      // Dot mode: very gentle movement from audio
+      const bassMove = bass * 0.1;
+      const midMove = mid * 0.08;
+      const trebleSpread = treble * 0.02;
 
       const dx = bassMove * Math.sin(animTime * 1.3)
                + midMove * Math.sin(animTime * 3.7 + 1.2)
@@ -979,7 +1005,7 @@ export class LiquidShowVisualizer {
 
       const px = cx + dx * curveScale;
       const py = cy + dy * curveScale;
-      const dotR = 4 + energy * 4;
+      const dotR = 4 + energy * 2;
 
       // Glow
       const grad = ctx.createRadialGradient(px, py, 0, px, py, dotR * 3);
@@ -1005,7 +1031,7 @@ export class LiquidShowVisualizer {
     // Compute Lissajous points — bass warps frequencies, mid drives rotation, treble adds shimmer
     const pointCount = 800;
     const points = [];
-    const rotSpeed = 0.08 + mid * 0.15;
+    const rotSpeed = 0.05 + mid * 0.08;
 
     for (let i = 0; i <= pointCount; i++) {
       const t = (i / pointCount) * Math.PI * 2;
@@ -1015,12 +1041,12 @@ export class LiquidShowVisualizer {
         const o = shapeOscs[j];
         if (o.amp < 0.01) continue;
 
-        // Bass-driven frequency modulation — gently warps the shape
-        const fmX = 1 + bass * 0.3 * Math.sin(animTime * 0.7 + j * 2.1);
-        const fmY = 1 + bass * 0.3 * Math.cos(animTime * 0.5 + j * 1.7);
+        // Bass-driven frequency modulation — very gentle warping
+        const fmX = 1 + bass * 0.12 * Math.sin(animTime * 0.7 + j * 2.1);
+        const fmY = 1 + bass * 0.12 * Math.cos(animTime * 0.5 + j * 1.7);
 
-        // Treble adds subtle harmonic shimmer
-        const trebleDistort = treble * 0.06 * Math.sin(t * (j + 4) * 2);
+        // Treble adds very subtle harmonic shimmer
+        const trebleDistort = treble * 0.03 * Math.sin(t * (j + 4) * 2);
 
         // Phase evolution (rotation knob + mid control speed)
         const phaseEvo = animTime * rotSpeed * (1 + rotation * 3) * (j + 1);
@@ -1032,10 +1058,10 @@ export class LiquidShowVisualizer {
       points.push({ x: cx + x * curveScale, y: cy + y * curveScale });
     }
 
-    // Dynamic glow scales gently with energy
-    const dynGlow = turbulence * (1 + energy * 0.5);
-    const glowWidth = 3 + dynGlow * 1.5 + bass * 1;
-    const coreWidth = 1.5 + energy * 0.4;
+    // Dynamic glow — smooth and gentle
+    const dynGlow = turbulence * (1 + energy * 0.25);
+    const glowWidth = 2.5 + dynGlow * 1 + bass * 0.5;
+    const coreWidth = 1.2 + energy * 0.2;
     const segSize = 20; // points per segment for multi-color
 
     if (isMultiColor && !isMono) {
@@ -1049,13 +1075,13 @@ export class LiquidShowVisualizer {
         const segHue = (baseHue + (s / pointCount) * 180) % 360;
         const [sr, sg, sb] = hslToRgb(segHue / 360, 0.9, 0.55);
         ctx.beginPath();
-        ctx.strokeStyle = `rgba(${sr},${sg},${sb},${opacity * (0.5 + energy * 0.15)})`;
-        ctx.shadowBlur = dynGlow * 15;
+        ctx.strokeStyle = `rgba(${sr},${sg},${sb},${opacity * (0.45 + energy * 0.08)})`;
+        ctx.shadowBlur = dynGlow * 10;
         ctx.shadowColor = `hsl(${segHue}, 70%, 70%)`;
         for (let i = s; i <= Math.min(s + segSize, pointCount); i++) {
           const p = points[i];
-          const jX = (Math.random() - 0.5) * 0.3 * (1 + treble * 1.5);
-          const jY = (Math.random() - 0.5) * 0.3 * (1 + treble * 1.5);
+          const jX = (Math.random() - 0.5) * 0.2 * (1 + treble * 0.5);
+          const jY = (Math.random() - 0.5) * 0.2 * (1 + treble * 0.5);
           if (i === s) ctx.moveTo(p.x + jX, p.y + jY);
           else ctx.lineTo(p.x + jX, p.y + jY);
         }
@@ -1067,8 +1093,8 @@ export class LiquidShowVisualizer {
       for (let s = 0; s < pointCount; s += segSize) {
         const segHue = (baseHue + (s / pointCount) * 180) % 360;
         ctx.beginPath();
-        ctx.strokeStyle = `hsl(${segHue}, 100%, ${60 + energy * 8}%)`;
-        ctx.shadowBlur = dynGlow * 5;
+        ctx.strokeStyle = `hsl(${segHue}, 100%, ${58 + energy * 4}%)`;
+        ctx.shadowBlur = dynGlow * 3;
         ctx.shadowColor = `hsl(${segHue}, 100%, 70%)`;
         for (let i = s; i <= Math.min(s + segSize, pointCount); i++) {
           const p = points[i];
@@ -1081,14 +1107,14 @@ export class LiquidShowVisualizer {
       // Single color mode
       // Pass 1: Glow
       ctx.beginPath();
-      ctx.strokeStyle = `rgba(${cr},${cg},${cb},${opacity * (0.5 + energy * 0.15)})`;
+      ctx.strokeStyle = `rgba(${cr},${cg},${cb},${opacity * (0.45 + energy * 0.08)})`;
       ctx.lineWidth = glowWidth;
-      ctx.shadowBlur = dynGlow * 15;
+      ctx.shadowBlur = dynGlow * 10;
       ctx.shadowColor = glowColor;
       for (let i = 0; i <= pointCount; i++) {
         const p = points[i];
-        const jX = (Math.random() - 0.5) * 0.3 * (1 + treble * 1.5);
-        const jY = (Math.random() - 0.5) * 0.3 * (1 + treble * 1.5);
+        const jX = (Math.random() - 0.5) * 0.2 * (1 + treble * 0.5);
+        const jY = (Math.random() - 0.5) * 0.2 * (1 + treble * 0.5);
         if (i === 0) ctx.moveTo(p.x + jX, p.y + jY);
         else ctx.lineTo(p.x + jX, p.y + jY);
       }
@@ -1098,7 +1124,7 @@ export class LiquidShowVisualizer {
       ctx.beginPath();
       ctx.strokeStyle = coreColor;
       ctx.lineWidth = coreWidth;
-      ctx.shadowBlur = dynGlow * 5;
+      ctx.shadowBlur = dynGlow * 3;
       ctx.shadowColor = glowColor;
       ctx.globalAlpha = opacity;
       for (let i = 0; i <= pointCount; i++) {
@@ -1109,14 +1135,14 @@ export class LiquidShowVisualizer {
       ctx.stroke();
     }
 
-    // Pass 3: Subtle hot white at high energy
-    if (energy > 0.3) {
-      const whiteHue = isMultiColor ? ((time * 40) % 360) : Math.round(effectiveHNorm * 360);
+    // Pass 3: Subtle hot white only at high energy
+    if (energy > 0.5) {
+      const whiteHue = isMultiColor ? ((time * 20) % 360) : Math.round(effectiveHNorm * 360);
       ctx.beginPath();
       ctx.strokeStyle = `hsl(${whiteHue}, ${isMono ? 0 : 60}%, 92%)`;
-      ctx.lineWidth = 0.5;
-      ctx.shadowBlur = dynGlow * 3;
-      ctx.globalAlpha = energy * 0.25 * opacity;
+      ctx.lineWidth = 0.4;
+      ctx.shadowBlur = dynGlow * 2;
+      ctx.globalAlpha = (energy - 0.5) * 0.3 * opacity;
       for (let i = 0; i <= pointCount; i++) {
         const p = points[i];
         if (i === 0) ctx.moveTo(p.x, p.y);
@@ -1621,6 +1647,7 @@ export class LiquidShowVisualizer {
         offset: { ...l.offset },
         imageSrc: l.type === 'image' && l.imageData ? l.imageData.src : undefined,
         lissajousShape: l.type === 'lissajous' ? (l._lissajousShape || 2) : undefined,
+        pulseMode: l.type === 'pulse' ? (l._pulseMode || 'constant') : undefined,
       })),
       selectedLayerIndex: this.selectedLayerIndex,
       selectedLayerIndices: [...this.selectedLayerIndices],
@@ -1679,6 +1706,9 @@ export class LiquidShowVisualizer {
       }
       if (saved.type === 'lissajous' && saved.lissajousShape !== undefined) {
         layer._lissajousShape = saved.lissajousShape;
+      }
+      if (saved.type === 'pulse' && saved.pulseMode !== undefined) {
+        layer._pulseMode = saved.pulseMode;
       }
       return layer;
     });
@@ -1883,16 +1913,25 @@ export class LiquidShowVisualizer {
     ];
 
     let lastGroup = null;
+    let currentGroupKnobs = null;
     allParams.forEach(param => {
       if (param.group && param.group !== lastGroup) {
         lastGroup = param.group;
+        // Create group container with vertical label + knobs
+        const groupDiv = document.createElement('div');
+        groupDiv.className = 'll-knob-group';
         const groupLabel = document.createElement('div');
         groupLabel.className = 'll-knob-group-label';
         groupLabel.textContent = param.group;
-        knobsRow.appendChild(groupLabel);
+        groupDiv.appendChild(groupLabel);
+        currentGroupKnobs = document.createElement('div');
+        currentGroupKnobs.className = 'll-knob-group-knobs';
+        groupDiv.appendChild(currentGroupKnobs);
+        knobsRow.appendChild(groupDiv);
       }
+      const target = currentGroupKnobs || knobsRow;
       const value = param._isHue ? layer.hue : layer.params[param.key];
-      const knobData = this._createKnob(knobsRow, param, value, (val) => {
+      const knobData = this._createKnob(target, param, value, (val) => {
         if (param._isHue) {
           selectedLayers.forEach(l => { l.hue = val; });
         } else {
@@ -2039,6 +2078,37 @@ export class LiquidShowVisualizer {
         galleryGrid.appendChild(thumb);
       });
       container.appendChild(galleryGrid);
+    }
+
+    // Pulse mode selector (only for pulse layers, single-select only)
+    if (layer.type === 'pulse' && !isMulti) {
+      const pulseRow = document.createElement('div');
+      pulseRow.className = 'll-image-row';
+      pulseRow.style.gap = '4px';
+
+      const pulseLabel = document.createElement('span');
+      pulseLabel.style.cssText = 'font-size:10px;color:#0f0;margin-right:4px;white-space:nowrap;';
+      pulseLabel.textContent = 'Mode:';
+      pulseRow.appendChild(pulseLabel);
+
+      const currentMode = layer._pulseMode || 'constant';
+      ['constant', 'beat'].forEach(mode => {
+        const btn = document.createElement('button');
+        btn.className = 'll-toggle' + (currentMode === mode ? ' active' : '');
+        btn.textContent = mode === 'constant' ? 'Constant' : 'Beat Sync';
+        btn.title = mode === 'constant' ? 'Rings emit continuously' : 'Rings only emit on beat hits';
+        btn.style.cssText = 'padding:2px 6px;font-size:10px;';
+        btn.addEventListener('click', () => {
+          if (this._isLayerLocked(this.selectedLayerIndex)) return;
+          layer._pulseMode = mode;
+          pulseRow.querySelectorAll('.ll-toggle').forEach(b => b.classList.remove('active'));
+          btn.classList.add('active');
+          this._pushHistory();
+        });
+        pulseRow.appendChild(btn);
+      });
+
+      container.appendChild(pulseRow);
     }
 
     // Lissajous shape + color selector (only for lissajous layers, single-select only)
@@ -2211,15 +2281,23 @@ export class LiquidShowVisualizer {
 
     const globalLockCheck = () => this._globalLock;
     let lastGlobalGroup = null;
+    let currentGlobalGroupKnobs = null;
     GLOBAL_PARAMS.forEach(param => {
       if (param.group && param.group !== lastGlobalGroup) {
         lastGlobalGroup = param.group;
+        const groupDiv = document.createElement('div');
+        groupDiv.className = 'll-knob-group';
         const groupLabel = document.createElement('div');
         groupLabel.className = 'll-knob-group-label';
         groupLabel.textContent = param.group;
-        knobsRow.appendChild(groupLabel);
+        groupDiv.appendChild(groupLabel);
+        currentGlobalGroupKnobs = document.createElement('div');
+        currentGlobalGroupKnobs.className = 'll-knob-group-knobs';
+        groupDiv.appendChild(currentGlobalGroupKnobs);
+        knobsRow.appendChild(groupDiv);
       }
-      const knobData = this._createKnob(knobsRow, param, this.globals[param.key], (val) => {
+      const target = currentGlobalGroupKnobs || knobsRow;
+      const knobData = this._createKnob(target, param, this.globals[param.key], (val) => {
         this.globals[param.key] = val;
       }, { lockCheck: globalLockCheck });
       this._globalKnobs.push(knobData);
@@ -2282,7 +2360,7 @@ export class LiquidShowVisualizer {
   _createKnob(container, param, initialValue, onChange, opts = {}) {
     const wrapper = document.createElement('div');
     wrapper.className = 'knob-wrapper ll-knob-wrapper';
-    if (param.tip) wrapper.title = param.tip;
+    if (param.tip) wrapper.setAttribute('data-tip', param.tip);
 
     const knob = document.createElement('div');
     knob.className = 'knob ll-knob';
