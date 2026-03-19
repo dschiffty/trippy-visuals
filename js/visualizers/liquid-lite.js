@@ -5,6 +5,9 @@
    ============================================ */
 
 import { LiquidShowVisualizer } from './liquid-show.js';
+import { LL_PRESETS } from './ll-presets.js';
+
+const DEFAULT_PRESET_ID = 'gallery-glow';
 
 export class LiquidLiteVisualizer {
   static get label() { return 'Liquid Lite'; }
@@ -14,6 +17,9 @@ export class LiquidLiteVisualizer {
   constructor(canvas) {
     this.canvas = canvas;
     this.engine = new LiquidShowVisualizer(canvas);
+    // Load default preset
+    const preset = LL_PRESETS.find(p => p.id === DEFAULT_PRESET_ID);
+    if (preset) this.engine.setState(JSON.parse(JSON.stringify(preset.vizState)));
   }
 
   // --- Delegate core methods to engine ---
@@ -35,6 +41,9 @@ export class LiquidLiteVisualizer {
     const presetSelector = LiquidShowVisualizer.buildPresetSelector(state => {
       this.engine.setState(state);
     });
+    // Set dropdown to show the default preset
+    const select = presetSelector.querySelector('select');
+    if (select) select.value = DEFAULT_PRESET_ID;
     panel.appendChild(presetSelector);
 
     // Randomize button
