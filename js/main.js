@@ -80,6 +80,13 @@ class App {
       this.resizeCanvas();
     });
     ro.observe(this.canvas.parentElement);
+
+    // Handle orientation changes on mobile (Safari doesn't always fire ResizeObserver)
+    window.addEventListener('orientationchange', () => {
+      setTimeout(() => this.resizeCanvas(), 100);
+      setTimeout(() => this.resizeCanvas(), 300);
+    });
+    window.addEventListener('resize', () => this.resizeCanvas());
   }
 
   /* ---- Controls ---- */
