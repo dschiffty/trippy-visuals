@@ -561,6 +561,93 @@ html, body {
   .preset-btn.mobile-only-mode { display: none; }
 }
 
+/* Hide desktop-only modes on mobile */
+@media (max-width: 1023px) {
+  .preset-btn.desktop-only-mode { display: none; }
+  .title-bar, .menu-bar { display: none !important; }
+
+  /* Maximize canvas on mobile */
+  .window {
+    border: none;
+    box-shadow: none;
+  }
+  .main-content {
+    padding: 0;
+  }
+  .canvas-container {
+    border: none;
+    box-shadow: none;
+  }
+  .status-bar {
+    display: none !important;
+  }
+  .control-panel {
+    padding: 2px 4px 0;
+    background: #000;
+    overflow-x: auto;
+    flex-direction: column;
+  }
+  .control-panel .presets-group {
+    border-color: rgba(255,255,255,0.15);
+    padding: 4px 6px 6px;
+    margin: 0;
+  }
+  .control-panel .presets-group legend {
+    color: rgba(255,255,255,0.6);
+    background: #000;
+    font-size: 10px;
+  }
+  .control-panel .params-group {
+    border-color: rgba(255,255,255,0.15);
+    padding: 4px 6px 6px;
+    margin: 0;
+    overflow-x: auto;
+  }
+  .control-panel .params-group legend {
+    color: rgba(255,255,255,0.6);
+    background: #000;
+    font-size: 10px;
+  }
+  .preset-btn {
+    color: #fff;
+    background: rgba(255,255,255,0.1);
+    border-color: rgba(255,255,255,0.2);
+  }
+  .preset-btn.active {
+    background: rgba(255,255,255,0.25);
+    border-color: rgba(255,255,255,0.4);
+  }
+  .knobs-container {
+    flex-wrap: nowrap;
+    gap: 12px;
+  }
+  .knob-wrapper {
+    transform: scale(0.8);
+    transform-origin: top center;
+  }
+
+  /* When Liquid Lite is active on mobile, minimize control panel footprint */
+  .control-panel.ll-active {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 99;
+    background: transparent;
+    padding: 0;
+  }
+  .control-panel.ll-active .presets-group {
+    border: none;
+    padding: 6px 8px;
+    background: rgba(0, 0, 0, 0.5);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+  }
+  .control-panel.ll-active .presets-group legend {
+    display: none;
+  }
+}
+
 /* Mobile preview button */
 .mobile-preview-btn {
   margin-top: 8px;
@@ -568,12 +655,19 @@ html, body {
 
 /* Liquid Lite mobile panel */
 .ll-lite-panel {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 100;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 12px;
-  padding: 8px 12px;
-  flex-wrap: wrap;
+  gap: 10px;
+  padding: 10px 12px;
+  background: rgba(0, 0, 0, 0.7);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
 }
 
 .ll-lite-panel .ll-preset-row {
@@ -582,19 +676,25 @@ html, body {
   padding: 0;
 }
 
+.ll-lite-panel .ll-preset-row label {
+  color: #fff !important;
+  font-size: 12px !important;
+}
+
 .ll-lite-panel .ll-preset-select {
   font-size: 14px;
   padding: 6px 8px;
 }
 
 .ll-lite-randomize {
-  padding: 8px 16px;
-  font-size: 14px;
+  padding: 8px 14px;
+  font-size: 13px;
   cursor: pointer;
   touch-action: manipulation;
   background: #c0c0c0;
   border: 2px outset #dfdfdf;
   font-family: inherit;
+  white-space: nowrap;
 }
 
 .ll-lite-randomize:active {

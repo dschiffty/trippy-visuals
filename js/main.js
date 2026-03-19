@@ -10,6 +10,7 @@ import { LiquidLiteVisualizer } from './visualizers/liquid-lite.js';
 import { ControlPanel } from './controls.js';
 
 const VIZ_CLASSES = {
+  liquidLite: LiquidLiteVisualizer,
   oscilloscope: OscilloscopeVisualizer,
   lissajous: LissajousVisualizer,
   spectrum: SpectrumVisualizer,
@@ -17,8 +18,10 @@ const VIZ_CLASSES = {
   liquidMetal: LiquidMetalVisualizer,
   liquidShow: LiquidShowVisualizer,
   itunes: ITunesVisualizer,
-  liquidLite: LiquidLiteVisualizer,
 };
+
+// Modes hidden on mobile (only Liquid Lite, Oscilloscope, Lissajous shown)
+const DESKTOP_ONLY_MODES = new Set(['spectrum', 'liquid', 'liquidMetal', 'liquidShow', 'itunes']);
 
 class App {
   constructor() {
@@ -35,9 +38,13 @@ class App {
     for (const [key, Cls] of Object.entries(VIZ_CLASSES)) {
       this.visualizers[key] = new Cls(this.canvas);
     }
-    this.activeKey = 'liquidShow';
+    // Default to Liquid Lite on mobile, Liquid Lights on desktop
+    const isMobileDevice = /Android|iPhone|iPad|iPod|webOS|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent)
+      || (navigator.maxTouchPoints > 1 && window.innerWidth < 1024);
+    const defaultKey = isMobileDevice ? 'liquidLite' : 'liquidShow';
+    this.activeKey = defaultKey;
     this.previousKey = null;
-    this.activeVisualizer = this.visualizers.liquidShow;
+    this.activeVisualizer = this.visualizers[defaultKey];
 
     // Set Lissajous demo defaults: random shape 3-9, multi-color hue
     const lissajous = this.visualizers.lissajous;
@@ -82,6 +89,7 @@ class App {
       key,
       label: Cls.label,
       mobileOnly: !!Cls.mobileOnly,
+      desktopOnly: DESKTOP_ONLY_MODES.has(key),
     }));
 
     this.controls.setupPresets(presets, this.activeKey);
@@ -115,7 +123,7 @@ class App {
         const target = this.previousKey && this.previousKey !== key ? this.previousKey : 'oscilloscope';
         this.switchPreset(target);
         this.controls.setupPresets(
-          Object.entries(VIZ_CLASSES).map(([k, C]) => ({ key: k, label: C.label, mobileOnly: !!C.mobileOnly })),
+          Object.entries(VIZ_CLASSES).map(([k, C]) => ({ key: k, label: C.label, mobileOnly: !!C.mobileOnly, desktopOnly: DESKTOP_ONLY_MODES.has(k) })),
           target,
         );
       };
@@ -146,19 +154,8 @@ class App {
     const isMobile = /Android|iPhone|iPad|iPod|webOS|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent)
       || (navigator.maxTouchPoints > 1 && window.innerWidth < 1024);
     if (isMobile) {
-      document.getElementById('mobile-warning')?.classList.remove('hidden');
-      document.getElementById('desktop-content')?.style.setProperty('display', 'none');
-
-      // Mobile preview button — launches Liquid Lite
-      const previewBtn = document.getElementById('mobile-preview-btn');
-      if (previewBtn) {
-        previewBtn.addEventListener('click', () => {
-          this.overlay.classList.add('hidden');
-          this.switchPreset('liquidLite');
-          document.querySelectorAll('.preset-btn').forEach(b => b.classList.remove('active'));
-          document.querySelector('.preset-btn[data-preset="liquidLite"]')?.classList.add('active');
-        });
-      }
+      // Skip overlay — go straight to Liquid Lite
+      this.overlay.classList.add('hidden');
     }
 
     // Start button
