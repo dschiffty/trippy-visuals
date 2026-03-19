@@ -20,10 +20,35 @@ export class LiquidLiteVisualizer {
     // Load default preset
     const preset = LL_PRESETS.find(p => p.id === DEFAULT_PRESET_ID);
     if (preset) this.engine.setState(JSON.parse(JSON.stringify(preset.vizState)));
+
+    // Mic state
+    this._micActive = false;
+    this._micStream = null;
+    this._micContext = null;
+    this._micAnalyser = null;
+    this._micSource = null;
+    this._micFreqData = null;
+    this._micTimeData = null;
+    this._micBtn = null;
+    this._micLevel = 0;
+    this._micLevelRAF = null;
+
+    // Clean up mic on page unload
+    this._onBeforeUnload = () => this._stopMic();
+    window.addEventListener('beforeunload', this._onBeforeUnload);
   }
 
-  // --- Delegate core methods to engine ---
-  draw(freq, time) { this.engine.draw(freq, time); }
+  // --- Core draw — substitute mic data when active ---
+  draw(freq, time) {
+    if (this._micActive && this._micAnalyser) {
+      this._micAnalyser.getByteFrequencyData(this._micFreqData);
+      this._micAnalyser.getByteTimeDomainData(this._micTimeData);
+      this.engine.draw(this._micFreqData, this._micTimeData);
+    } else {
+      this.engine.draw(freq, time);
+    }
+  }
+
   reset() { this.engine.reset(); }
   getState() { return this.engine.getState(); }
   setState(s) { this.engine.setState(s); }
@@ -45,6 +70,14 @@ export class LiquidLiteVisualizer {
     const select = presetSelector.querySelector('select');
     if (select) select.value = DEFAULT_PRESET_ID;
     panel.appendChild(presetSelector);
+
+    // Mic toggle button
+    const micBtn = document.createElement('button');
+    micBtn.className = 'll-lite-mic';
+    micBtn.innerHTML = '<span class="mic-icon">🎤</span><span class="mic-label">Mic</span>';
+    micBtn.addEventListener('click', () => this._toggleMic());
+    panel.appendChild(micBtn);
+    this._micBtn = micBtn;
 
     // Randomize button
     const randomBtn = document.createElement('button');
@@ -71,6 +104,7 @@ export class LiquidLiteVisualizer {
   }
 
   destroyPanel() {
+    this._stopMic();
     if (this._onCanvasTap) {
       this.canvas.removeEventListener('click', this._onCanvasTap);
       this._onCanvasTap = null;
@@ -79,12 +113,125 @@ export class LiquidLiteVisualizer {
       this.panelEl.remove();
       this.panelEl = null;
     }
+    this._micBtn = null;
     this._controlPanelEl?.classList.remove('ll-active', 'll-ui-hidden');
     this._uiHidden = false;
   }
 
+  // --- Mic Input ---
+
+  async _toggleMic() {
+    if (this._micActive) {
+      this._stopMic();
+    } else {
+      await this._startMic();
+    }
+  }
+
+  async _startMic() {
+    try {
+      this._micStream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: false,
+          noiseSuppression: false,
+          autoGainControl: false,
+        },
+      });
+
+      this._micContext = new (window.AudioContext || window.webkitAudioContext)();
+      this._micSource = this._micContext.createMediaStreamSource(this._micStream);
+
+      this._micAnalyser = this._micContext.createAnalyser();
+      this._micAnalyser.fftSize = 2048;
+      this._micAnalyser.smoothingTimeConstant = 0.8;
+      this._micAnalyser.minDecibels = -90;
+      this._micAnalyser.maxDecibels = -10;
+
+      this._micSource.connect(this._micAnalyser);
+
+      this._micFreqData = new Uint8Array(this._micAnalyser.frequencyBinCount);
+      this._micTimeData = new Uint8Array(this._micAnalyser.fftSize);
+
+      this._micActive = true;
+      this._updateMicUI(true);
+      this._startLevelMonitor();
+
+      // Handle track ending unexpectedly
+      this._micStream.getAudioTracks()[0].addEventListener('ended', () => {
+        this._stopMic();
+      });
+
+    } catch (err) {
+      // Permission denied or not available
+      this._showMicError(err);
+    }
+  }
+
+  _stopMic() {
+    this._micActive = false;
+    if (this._micLevelRAF) {
+      cancelAnimationFrame(this._micLevelRAF);
+      this._micLevelRAF = null;
+    }
+    if (this._micStream) {
+      this._micStream.getTracks().forEach(t => t.stop());
+      this._micStream = null;
+    }
+    if (this._micSource) {
+      this._micSource.disconnect();
+      this._micSource = null;
+    }
+    if (this._micContext && this._micContext.state !== 'closed') {
+      this._micContext.close();
+      this._micContext = null;
+    }
+    this._micAnalyser = null;
+    this._micFreqData = null;
+    this._micTimeData = null;
+    this._updateMicUI(false);
+  }
+
+  _updateMicUI(active) {
+    if (!this._micBtn) return;
+    this._micBtn.classList.toggle('mic-active', active);
+    if (!active) {
+      this._micBtn.style.removeProperty('--mic-level');
+    }
+  }
+
+  _startLevelMonitor() {
+    const update = () => {
+      if (!this._micActive || !this._micAnalyser) return;
+      this._micAnalyser.getByteFrequencyData(this._micFreqData);
+      // Average the low-frequency bins for a level indicator
+      let sum = 0;
+      const bins = Math.min(32, this._micFreqData.length);
+      for (let i = 0; i < bins; i++) sum += this._micFreqData[i];
+      const level = sum / (bins * 255); // 0..1
+      this._micLevel = level;
+      if (this._micBtn) {
+        this._micBtn.style.setProperty('--mic-level', level.toFixed(2));
+      }
+      this._micLevelRAF = requestAnimationFrame(update);
+    };
+    this._micLevelRAF = requestAnimationFrame(update);
+  }
+
+  _showMicError(err) {
+    const msg = document.createElement('div');
+    msg.className = 'll-mic-error';
+    if (err.name === 'NotAllowedError') {
+      msg.textContent = 'Mic access denied — enable in browser settings for audio reactivity';
+    } else if (err.name === 'NotFoundError') {
+      msg.textContent = 'No microphone found';
+    } else {
+      msg.textContent = 'Mic unavailable — HTTPS required';
+    }
+    this.panelEl?.appendChild(msg);
+    setTimeout(() => msg.remove(), 4000);
+  }
+
   // --- Extensibility stubs for future features ---
-  enableMicInput() { /* future: connect Web Audio mic source */ }
   enableTouchReactivity() { /* future: map touch events to reactive params */ }
   enableCameraFeed() { /* future: pipe camera as an image layer */ }
 }

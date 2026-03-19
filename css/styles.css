@@ -740,6 +740,84 @@ html, body {
   border-style: inset;
 }
 
+/* Mic toggle button */
+.ll-lite-mic {
+  --mic-level: 0;
+  padding: 8px 12px;
+  font-size: 13px;
+  cursor: pointer;
+  touch-action: manipulation;
+  background: #c0c0c0;
+  border: 2px outset #dfdfdf;
+  font-family: inherit;
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  position: relative;
+  overflow: hidden;
+  transition: background 0.2s;
+}
+.ll-lite-mic:active {
+  border-style: inset;
+}
+.ll-lite-mic .mic-icon {
+  font-size: 15px;
+  position: relative;
+  z-index: 1;
+}
+.ll-lite-mic .mic-label {
+  position: relative;
+  z-index: 1;
+}
+
+/* Active mic state — green glow with live level */
+.ll-lite-mic.mic-active {
+  background: #2ecc40;
+  border-color: #27ae60;
+  color: #fff;
+  box-shadow: 0 0 8px rgba(46, 204, 64, 0.6);
+}
+.ll-lite-mic.mic-active::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: calc(var(--mic-level) * 100%);
+  background: rgba(255, 255, 255, 0.25);
+  transition: height 0.08s linear;
+  pointer-events: none;
+}
+
+/* Mic error toast */
+.ll-mic-error {
+  position: fixed;
+  bottom: 60px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(0, 0, 0, 0.85);
+  color: #ff6b6b;
+  padding: 8px 16px;
+  border-radius: 8px;
+  font-size: 12px;
+  white-space: nowrap;
+  max-width: 90vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  z-index: 200;
+  animation: ll-mic-error-in 0.3s ease, ll-mic-error-out 0.3s ease 3.7s;
+  pointer-events: none;
+}
+@keyframes ll-mic-error-in {
+  from { opacity: 0; transform: translateX(-50%) translateY(10px); }
+  to { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+@keyframes ll-mic-error-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
 /* ---- Knobs ---- */
 .knobs-container {
   display: flex;
