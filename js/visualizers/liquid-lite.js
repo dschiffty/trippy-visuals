@@ -74,7 +74,7 @@ export class LiquidLiteVisualizer {
     // Mic toggle button
     const micBtn = document.createElement('button');
     micBtn.className = 'll-lite-mic';
-    micBtn.innerHTML = '<span class="mic-icon">🎤</span><span class="mic-label">Mic</span>';
+    micBtn.innerHTML = '<span class="mic-icon">🎤</span>';
     micBtn.addEventListener('click', () => this._toggleMic());
     panel.appendChild(micBtn);
     this._micBtn = micBtn;
@@ -141,13 +141,18 @@ export class LiquidLiteVisualizer {
       this._micContext = new (window.AudioContext || window.webkitAudioContext)();
       this._micSource = this._micContext.createMediaStreamSource(this._micStream);
 
+      // Boost mic signal for better sensitivity
+      this._micGain = this._micContext.createGain();
+      this._micGain.gain.value = 3.0;
+
       this._micAnalyser = this._micContext.createAnalyser();
       this._micAnalyser.fftSize = 2048;
-      this._micAnalyser.smoothingTimeConstant = 0.8;
-      this._micAnalyser.minDecibels = -90;
+      this._micAnalyser.smoothingTimeConstant = 0.75;
+      this._micAnalyser.minDecibels = -70;
       this._micAnalyser.maxDecibels = -10;
 
-      this._micSource.connect(this._micAnalyser);
+      this._micSource.connect(this._micGain);
+      this._micGain.connect(this._micAnalyser);
 
       this._micFreqData = new Uint8Array(this._micAnalyser.frequencyBinCount);
       this._micTimeData = new Uint8Array(this._micAnalyser.fftSize);
@@ -180,6 +185,10 @@ export class LiquidLiteVisualizer {
     if (this._micSource) {
       this._micSource.disconnect();
       this._micSource = null;
+    }
+    if (this._micGain) {
+      this._micGain.disconnect();
+      this._micGain = null;
     }
     if (this._micContext && this._micContext.state !== 'closed') {
       this._micContext.close();
