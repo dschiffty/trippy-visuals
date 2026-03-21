@@ -46,7 +46,7 @@ class App {
       gainValue: 3.0,
       levelRAF: null,
       level: 0,
-      onStateChange: null, // callback for UI updates
+      onStateChange: null, // callback for panel UI updates (set by Liquid Lite)
     };
     window.addEventListener('beforeunload', () => this.stopMic());
 
@@ -169,6 +169,9 @@ class App {
     this.controls.onParamChange = (paramKey, value) => {
       this.activeVisualizer.setParam(paramKey, value);
     };
+
+    // Show/hide floating mic button on mobile
+    this._updateFloatingMicVisibility();
   }
 
   /* ---- UI Events ---- */
@@ -177,9 +180,12 @@ class App {
     // Mobile detection
     const isMobile = /Android|iPhone|iPad|iPod|webOS|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent)
       || (navigator.maxTouchPoints > 1 && window.innerWidth < 1024);
+    this.isMobile = isMobile;
     if (isMobile) {
       // Skip overlay — go straight to Liquid Lite
       this.overlay.classList.add('hidden');
+      // Create floating mic button for modes without a built-in mic toggle
+      this._createFloatingMic();
     }
 
     // Start button
@@ -444,6 +450,127 @@ class App {
     return { frequency: freq, timeDomain: time };
   }
 
+  /* ---- Floating Mic Button (mobile, non-Liquid-Lite modes) ---- */
+
+  _createFloatingMic() {
+    const btn = document.createElement('button');
+    btn.className = 'll-lite-mic floating-mic';
+    btn.innerHTML = '<span class="mic-icon">🎤</span>';
+    btn.style.display = 'none'; // hidden by default, shown for non-custom-panel modes
+
+    // Short tap = toggle, long press = gain popover
+    let longPressTimer = null;
+    let didLongPress = false;
+    const startPress = () => {
+      didLongPress = false;
+      longPressTimer = setTimeout(() => {
+        didLongPress = true;
+        this._showFloatingGainPopover(btn);
+      }, 500);
+    };
+    const endPress = () => {
+      clearTimeout(longPressTimer);
+      if (!didLongPress) this.toggleMic();
+    };
+    const cancelPress = () => { clearTimeout(longPressTimer); };
+    btn.addEventListener('touchstart', startPress, { passive: true });
+    btn.addEventListener('touchend', (e) => { e.preventDefault(); endPress(); });
+    btn.addEventListener('touchcancel', cancelPress);
+    btn.addEventListener('mousedown', startPress);
+    btn.addEventListener('mouseup', endPress);
+    btn.addEventListener('mouseleave', cancelPress);
+
+    document.body.appendChild(btn);
+    this._floatingMicBtn = btn;
+
+    // Floating mic listens via its own callback
+    this._floatingMicStateChange = (state) => {
+      btn.classList.toggle('mic-active', state === true);
+      if (!state) btn.style.removeProperty('--mic-level');
+      if (state === true) this._startFloatingLevelMonitor();
+      else this._stopFloatingLevelMonitor();
+    };
+  }
+
+  _updateFloatingMicVisibility() {
+    if (!this._floatingMicBtn) return;
+    // Show floating mic when active mode does NOT have its own panel (i.e. not Liquid Lite / Liquid Show)
+    const hasOwnPanel = !!this.activeVisualizer?.buildPanel;
+    this._floatingMicBtn.style.display = hasOwnPanel ? 'none' : 'flex';
+    // Sync active state
+    this._floatingMicBtn.classList.toggle('mic-active', this.mic.active);
+    if (this.mic.active) this._startFloatingLevelMonitor();
+  }
+
+  _startFloatingLevelMonitor() {
+    this._stopFloatingLevelMonitor();
+    const update = () => {
+      if (!this.mic.active || !this.mic.analyser) return;
+      this.mic.analyser.getByteFrequencyData(this.mic.freqData);
+      let sum = 0;
+      const bins = Math.min(32, this.mic.freqData.length);
+      for (let i = 0; i < bins; i++) sum += this.mic.freqData[i];
+      const level = sum / (bins * 255);
+      if (this._floatingMicBtn) this._floatingMicBtn.style.setProperty('--mic-level', level.toFixed(2));
+      this._floatingMicLevelRAF = requestAnimationFrame(update);
+    };
+    this._floatingMicLevelRAF = requestAnimationFrame(update);
+  }
+
+  _stopFloatingLevelMonitor() {
+    if (this._floatingMicLevelRAF) {
+      cancelAnimationFrame(this._floatingMicLevelRAF);
+      this._floatingMicLevelRAF = null;
+    }
+  }
+
+  _showFloatingGainPopover(anchorBtn) {
+    this._dismissFloatingGainPopover();
+
+    const popover = document.createElement('div');
+    popover.className = 'll-gain-popover floating-gain-popover';
+
+    const label = document.createElement('div');
+    label.className = 'll-gain-label';
+    label.textContent = `Mic Gain: ${this.mic.gainValue.toFixed(1)}x`;
+    popover.appendChild(label);
+
+    const slider = document.createElement('input');
+    slider.type = 'range';
+    slider.className = 'll-gain-slider';
+    slider.min = '0.5';
+    slider.max = '10';
+    slider.step = '0.5';
+    slider.value = this.mic.gainValue;
+    slider.addEventListener('input', () => {
+      this.setMicGain(parseFloat(slider.value));
+      label.textContent = `Mic Gain: ${this.mic.gainValue.toFixed(1)}x`;
+    });
+    popover.appendChild(slider);
+
+    document.body.appendChild(popover);
+    this._floatingGainPopover = popover;
+
+    setTimeout(() => {
+      this._floatingGainDismiss = (e) => {
+        if (!popover.contains(e.target) && e.target !== anchorBtn && !anchorBtn.contains(e.target)) {
+          this._dismissFloatingGainPopover();
+        }
+      };
+      document.addEventListener('click', this._floatingGainDismiss, true);
+      document.addEventListener('touchstart', this._floatingGainDismiss, true);
+    }, 10);
+  }
+
+  _dismissFloatingGainPopover() {
+    if (this._floatingGainPopover) { this._floatingGainPopover.remove(); this._floatingGainPopover = null; }
+    if (this._floatingGainDismiss) {
+      document.removeEventListener('click', this._floatingGainDismiss, true);
+      document.removeEventListener('touchstart', this._floatingGainDismiss, true);
+      this._floatingGainDismiss = null;
+    }
+  }
+
   /* ---- Shared Mic Input ---- */
 
   async toggleMic() {
@@ -478,12 +605,12 @@ class App {
       this.mic.timeData = new Uint8Array(this.mic.analyser.fftSize);
 
       this.mic.active = true;
-      this.mic.onStateChange?.(true);
+      this._notifyMicState(true);
 
       // Handle track ending unexpectedly
       this.mic.stream.getAudioTracks()[0].addEventListener('ended', () => this.stopMic());
     } catch (err) {
-      this.mic.onStateChange?.('error', err);
+      this._notifyMicState('error', err);
     }
   }
 
@@ -496,7 +623,15 @@ class App {
     this.mic.analyser = null;
     this.mic.freqData = null;
     this.mic.timeData = null;
-    this.mic.onStateChange?.(false);
+    this._notifyMicState(false);
+  }
+
+  _notifyMicState(state, err) {
+    // Notify panel callback (Liquid Lite)
+    if (err) this.mic.onStateChange?.('error', err);
+    else this.mic.onStateChange?.(state);
+    // Notify floating mic button
+    this._floatingMicStateChange?.(state);
   }
 
   setMicGain(value) {
@@ -878,5 +1013,5 @@ class App {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-  new App();
+  window.__app = new App();
 });
