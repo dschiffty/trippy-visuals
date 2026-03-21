@@ -110,15 +110,7 @@ export class LiquidLiteVisualizer {
     };
     if (app) app.mic.onStateChange = this._micStateHandler;
 
-    // Tap canvas to toggle UI visibility
-    this._uiHidden = false;
-    this._onCanvasTap = (e) => {
-      if (e.target.closest('.ll-lite-panel, .ll-gain-popover, .control-panel button, .control-panel select')) return;
-      this._uiHidden = !this._uiHidden;
-      controlPanelEl.classList.toggle('ll-ui-hidden', this._uiHidden);
-      panel.classList.toggle('ll-ui-hidden', this._uiHidden);
-    };
-    this.canvas.addEventListener('click', this._onCanvasTap);
+    // UI toggle is handled by the app-level mobile tap handler
   }
 
   destroyPanel() {
@@ -126,14 +118,10 @@ export class LiquidLiteVisualizer {
     this._stopLevelMonitor();
     // Do NOT stop the mic — it persists across mode switches
     if (this._app) this._app.mic.onStateChange = null;
-    if (this._onCanvasTap) {
-      this.canvas.removeEventListener('click', this._onCanvasTap);
-      this._onCanvasTap = null;
-    }
     if (this.panelEl) { this.panelEl.remove(); this.panelEl = null; }
     this._micBtn = null;
     this._controlPanelEl?.classList.remove('ll-active', 'll-ui-hidden');
-    this._uiHidden = false;
+
   }
 
   // --- Mic (delegates to app) ---

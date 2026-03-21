@@ -172,6 +172,13 @@ class App {
 
     // Show/hide floating mic button on mobile
     this._updateFloatingMicVisibility();
+    // Reset UI visibility on mode switch
+    if (this.isMobile) {
+      this._mobileUIHidden = false;
+      document.querySelector('.control-panel')?.classList.remove('mobile-ui-hidden', 'll-ui-hidden');
+      document.querySelector('.ll-lite-panel')?.classList.remove('ll-ui-hidden');
+      this._floatingMicBtn?.classList.remove('mobile-ui-hidden');
+    }
   }
 
   /* ---- UI Events ---- */
@@ -186,6 +193,13 @@ class App {
       this.overlay.classList.add('hidden');
       // Create floating mic button for modes without a built-in mic toggle
       this._createFloatingMic();
+      // Tap canvas to toggle UI on all mobile modes
+      this._mobileUIHidden = false;
+      this.canvas.addEventListener('click', (e) => {
+        if (e.target.closest('.ll-lite-panel, .ll-gain-popover, .floating-mic, .control-panel button, .control-panel select, .floating-gain-popover')) return;
+        this._mobileUIHidden = !this._mobileUIHidden;
+        this._updateMobileUIVisibility();
+      });
     }
 
     // Start button
@@ -448,6 +462,26 @@ class App {
     }
 
     return { frequency: freq, timeDomain: time };
+  }
+
+  /* ---- Mobile UI Toggle ---- */
+
+  _updateMobileUIVisibility() {
+    const hidden = this._mobileUIHidden;
+    const controlPanel = document.querySelector('.control-panel');
+    const floatingMic = this._floatingMicBtn;
+
+    // For Liquid Lite, delegate to its own panel toggle
+    if (controlPanel.classList.contains('ll-active')) {
+      controlPanel.classList.toggle('ll-ui-hidden', hidden);
+      const llPanel = document.querySelector('.ll-lite-panel');
+      if (llPanel) llPanel.classList.toggle('ll-ui-hidden', hidden);
+      return;
+    }
+
+    // For other modes, toggle the control panel and floating mic
+    controlPanel.classList.toggle('mobile-ui-hidden', hidden);
+    if (floatingMic) floatingMic.classList.toggle('mobile-ui-hidden', hidden);
   }
 
   /* ---- Floating Mic Button (mobile, non-Liquid-Lite modes) ---- */
