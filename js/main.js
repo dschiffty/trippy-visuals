@@ -33,6 +33,23 @@ class App {
     this.targetFps = 60;
     this.lastFrameTime = 0;
 
+    // Shared mic input state (persists across mode switches)
+    this.mic = {
+      active: false,
+      stream: null,
+      context: null,
+      source: null,
+      gainNode: null,
+      analyser: null,
+      freqData: null,
+      timeData: null,
+      gainValue: 3.0,
+      levelRAF: null,
+      level: 0,
+      onStateChange: null, // callback for UI updates
+    };
+    window.addEventListener('beforeunload', () => this.stopMic());
+
     // Create visualizer instances
     this.visualizers = {};
     for (const [key, Cls] of Object.entries(VIZ_CLASSES)) {
@@ -136,7 +153,7 @@ class App {
       };
       this.activeVisualizer.onFullscreen = () => this.toggleFullscreen();
       document.querySelector('.params-group').style.display = 'none';
-      this.activeVisualizer.buildPanel(document.querySelector('.control-panel'));
+      this.activeVisualizer.buildPanel(document.querySelector('.control-panel'), this);
     } else {
       this.controls.setVisualizer(VIZ_CLASSES[key]);
       // Sync control panel knobs to the visualizer's current values
@@ -352,7 +369,13 @@ class App {
       }
 
       let frequencyData, timeDomainData;
-      if (this.audio.isCapturing) {
+      if (this.mic.active && this.mic.analyser) {
+        // Mic input takes priority
+        this.mic.analyser.getByteFrequencyData(this.mic.freqData);
+        this.mic.analyser.getByteTimeDomainData(this.mic.timeData);
+        frequencyData = this.mic.freqData;
+        timeDomainData = this.mic.timeData;
+      } else if (this.audio.isCapturing) {
         frequencyData = this.audio.getFrequencyData();
         timeDomainData = this.audio.getTimeDomainData();
       } else {
@@ -419,6 +442,66 @@ class App {
     }
 
     return { frequency: freq, timeDomain: time };
+  }
+
+  /* ---- Shared Mic Input ---- */
+
+  async toggleMic() {
+    if (this.mic.active) {
+      this.stopMic();
+    } else {
+      await this.startMic();
+    }
+  }
+
+  async startMic() {
+    try {
+      this.mic.stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+      });
+      this.mic.context = new (window.AudioContext || window.webkitAudioContext)();
+      this.mic.source = this.mic.context.createMediaStreamSource(this.mic.stream);
+
+      this.mic.gainNode = this.mic.context.createGain();
+      this.mic.gainNode.gain.value = this.mic.gainValue;
+
+      this.mic.analyser = this.mic.context.createAnalyser();
+      this.mic.analyser.fftSize = 2048;
+      this.mic.analyser.smoothingTimeConstant = 0.75;
+      this.mic.analyser.minDecibels = -70;
+      this.mic.analyser.maxDecibels = -10;
+
+      this.mic.source.connect(this.mic.gainNode);
+      this.mic.gainNode.connect(this.mic.analyser);
+
+      this.mic.freqData = new Uint8Array(this.mic.analyser.frequencyBinCount);
+      this.mic.timeData = new Uint8Array(this.mic.analyser.fftSize);
+
+      this.mic.active = true;
+      this.mic.onStateChange?.(true);
+
+      // Handle track ending unexpectedly
+      this.mic.stream.getAudioTracks()[0].addEventListener('ended', () => this.stopMic());
+    } catch (err) {
+      this.mic.onStateChange?.('error', err);
+    }
+  }
+
+  stopMic() {
+    this.mic.active = false;
+    if (this.mic.stream) { this.mic.stream.getTracks().forEach(t => t.stop()); this.mic.stream = null; }
+    if (this.mic.source) { this.mic.source.disconnect(); this.mic.source = null; }
+    if (this.mic.gainNode) { this.mic.gainNode.disconnect(); this.mic.gainNode = null; }
+    if (this.mic.context && this.mic.context.state !== 'closed') { this.mic.context.close(); this.mic.context = null; }
+    this.mic.analyser = null;
+    this.mic.freqData = null;
+    this.mic.timeData = null;
+    this.mic.onStateChange?.(false);
+  }
+
+  setMicGain(value) {
+    this.mic.gainValue = value;
+    if (this.mic.gainNode) this.mic.gainNode.gain.value = value;
   }
 
   /* ---- Canvas ---- */
