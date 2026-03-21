@@ -71,13 +71,36 @@ export class LiquidLiteVisualizer {
     if (select) select.value = DEFAULT_PRESET_ID;
     panel.appendChild(presetSelector);
 
-    // Mic toggle button
+    // Mic toggle button with long-press gain control
     const micBtn = document.createElement('button');
     micBtn.className = 'll-lite-mic';
     micBtn.innerHTML = '<span class="mic-icon">🎤</span>';
-    micBtn.addEventListener('click', () => this._toggleMic());
-    panel.appendChild(micBtn);
     this._micBtn = micBtn;
+    this._micGainValue = 3.0;
+
+    // Short tap = toggle mic, long press = open gain popover
+    let longPressTimer = null;
+    let didLongPress = false;
+    const startPress = (e) => {
+      didLongPress = false;
+      longPressTimer = setTimeout(() => {
+        didLongPress = true;
+        this._showGainPopover(micBtn);
+      }, 500);
+    };
+    const endPress = (e) => {
+      clearTimeout(longPressTimer);
+      if (!didLongPress) this._toggleMic();
+    };
+    const cancelPress = () => { clearTimeout(longPressTimer); };
+    micBtn.addEventListener('touchstart', startPress, { passive: true });
+    micBtn.addEventListener('touchend', (e) => { e.preventDefault(); endPress(); });
+    micBtn.addEventListener('touchcancel', cancelPress);
+    // Mouse fallback for desktop testing
+    micBtn.addEventListener('mousedown', startPress);
+    micBtn.addEventListener('mouseup', endPress);
+    micBtn.addEventListener('mouseleave', cancelPress);
+    panel.appendChild(micBtn);
 
     // Randomize button
     const randomBtn = document.createElement('button');
@@ -104,6 +127,7 @@ export class LiquidLiteVisualizer {
   }
 
   destroyPanel() {
+    this._dismissGainPopover();
     this._stopMic();
     if (this._onCanvasTap) {
       this.canvas.removeEventListener('click', this._onCanvasTap);
@@ -142,8 +166,8 @@ export class LiquidLiteVisualizer {
       this._micSource = this._micContext.createMediaStreamSource(this._micStream);
 
       // Boost mic signal for better sensitivity
-      this._micGain = this._micContext.createGain();
-      this._micGain.gain.value = 3.0;
+      this._micGainNode = this._micContext.createGain();
+      this._micGainNode.gain.value = this._micGainValue;
 
       this._micAnalyser = this._micContext.createAnalyser();
       this._micAnalyser.fftSize = 2048;
@@ -151,8 +175,8 @@ export class LiquidLiteVisualizer {
       this._micAnalyser.minDecibels = -70;
       this._micAnalyser.maxDecibels = -10;
 
-      this._micSource.connect(this._micGain);
-      this._micGain.connect(this._micAnalyser);
+      this._micSource.connect(this._micGainNode);
+      this._micGainNode.connect(this._micAnalyser);
 
       this._micFreqData = new Uint8Array(this._micAnalyser.frequencyBinCount);
       this._micTimeData = new Uint8Array(this._micAnalyser.fftSize);
@@ -186,9 +210,9 @@ export class LiquidLiteVisualizer {
       this._micSource.disconnect();
       this._micSource = null;
     }
-    if (this._micGain) {
-      this._micGain.disconnect();
-      this._micGain = null;
+    if (this._micGainNode) {
+      this._micGainNode.disconnect();
+      this._micGainNode = null;
     }
     if (this._micContext && this._micContext.state !== 'closed') {
       this._micContext.close();
@@ -238,6 +262,64 @@ export class LiquidLiteVisualizer {
     }
     this.panelEl?.appendChild(msg);
     setTimeout(() => msg.remove(), 4000);
+  }
+
+  // --- Gain Popover ---
+
+  _showGainPopover(anchorEl) {
+    // Remove existing popover if any
+    this._dismissGainPopover();
+
+    const popover = document.createElement('div');
+    popover.className = 'll-gain-popover';
+
+    const label = document.createElement('div');
+    label.className = 'll-gain-label';
+    label.textContent = `Mic Gain: ${this._micGainValue.toFixed(1)}x`;
+    popover.appendChild(label);
+
+    const slider = document.createElement('input');
+    slider.type = 'range';
+    slider.className = 'll-gain-slider';
+    slider.min = '0.5';
+    slider.max = '10';
+    slider.step = '0.5';
+    slider.value = this._micGainValue;
+    slider.addEventListener('input', () => {
+      this._micGainValue = parseFloat(slider.value);
+      label.textContent = `Mic Gain: ${this._micGainValue.toFixed(1)}x`;
+      // Update live gain node if mic is active
+      if (this._micGainNode) {
+        this._micGainNode.gain.value = this._micGainValue;
+      }
+    });
+    popover.appendChild(slider);
+
+    this.panelEl.appendChild(popover);
+    this._gainPopover = popover;
+
+    // Dismiss when tapping outside
+    setTimeout(() => {
+      this._dismissGainHandler = (e) => {
+        if (!popover.contains(e.target) && e.target !== anchorEl && !anchorEl.contains(e.target)) {
+          this._dismissGainPopover();
+        }
+      };
+      document.addEventListener('click', this._dismissGainHandler, true);
+      document.addEventListener('touchstart', this._dismissGainHandler, true);
+    }, 10);
+  }
+
+  _dismissGainPopover() {
+    if (this._gainPopover) {
+      this._gainPopover.remove();
+      this._gainPopover = null;
+    }
+    if (this._dismissGainHandler) {
+      document.removeEventListener('click', this._dismissGainHandler, true);
+      document.removeEventListener('touchstart', this._dismissGainHandler, true);
+      this._dismissGainHandler = null;
+    }
   }
 
   // --- Extensibility stubs for future features ---
