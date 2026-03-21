@@ -390,9 +390,20 @@ class App {
 
       let frequencyData, timeDomainData;
       if (this.mic.active && this.mic.analyser) {
-        // Mic input takes priority
+        // Mic input takes priority — apply secondary smoothing for stable visuals
         this.mic.analyser.getByteFrequencyData(this.mic.freqData);
         this.mic.analyser.getByteTimeDomainData(this.mic.timeData);
+        const sf = this.mic.smoothedFreq;
+        const st = this.mic.smoothedTime;
+        const alpha = 0.15; // blend factor: lower = smoother
+        for (let i = 0; i < this.mic.freqData.length; i++) {
+          sf[i] += (this.mic.freqData[i] - sf[i]) * alpha;
+          this.mic.freqData[i] = sf[i];
+        }
+        for (let i = 0; i < this.mic.timeData.length; i++) {
+          st[i] += (this.mic.timeData[i] - st[i]) * 0.3;
+          this.mic.timeData[i] = st[i];
+        }
         frequencyData = this.mic.freqData;
         timeDomainData = this.mic.timeData;
       } else if (this.audio.isCapturing) {
@@ -628,15 +639,19 @@ class App {
 
       this.mic.analyser = this.mic.context.createAnalyser();
       this.mic.analyser.fftSize = 2048;
-      this.mic.analyser.smoothingTimeConstant = 0.75;
-      this.mic.analyser.minDecibels = -70;
+      this.mic.analyser.smoothingTimeConstant = 0.88;
+      this.mic.analyser.minDecibels = -80;
       this.mic.analyser.maxDecibels = -10;
 
       this.mic.source.connect(this.mic.gainNode);
       this.mic.gainNode.connect(this.mic.analyser);
 
-      this.mic.freqData = new Uint8Array(this.mic.analyser.frequencyBinCount);
+      const binCount = this.mic.analyser.frequencyBinCount;
+      this.mic.freqData = new Uint8Array(binCount);
       this.mic.timeData = new Uint8Array(this.mic.analyser.fftSize);
+      // Secondary smoothing buffer for extra-smooth visuals
+      this.mic.smoothedFreq = new Float32Array(binCount);
+      this.mic.smoothedTime = new Float32Array(this.mic.analyser.fftSize);
 
       this.mic.active = true;
       this._notifyMicState(true);
@@ -657,6 +672,8 @@ class App {
     this.mic.analyser = null;
     this.mic.freqData = null;
     this.mic.timeData = null;
+    this.mic.smoothedFreq = null;
+    this.mic.smoothedTime = null;
     this._notifyMicState(false);
   }
 
