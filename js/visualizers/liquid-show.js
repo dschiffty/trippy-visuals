@@ -1329,6 +1329,11 @@ export class LiquidShowVisualizer {
       this.layerCanvases.push(document.createElement('canvas'));
     }
 
+    // Timing instrumentation
+    const timing = this._timing || (this._timing = { layers: [], post: {}, total: 0 });
+    timing.layers.length = 0;
+    const drawStart = performance.now();
+
     // Render each layer
     for (let i = 0; i < this.layers.length; i++) {
       const layer = this.layers[i];
@@ -1344,7 +1349,9 @@ export class LiquidShowVisualizer {
       }
 
       const audioLevel = this._getAudioForLayer(layer, audio) * this.globals.audioGain;
+      const t0 = performance.now();
       this._renderLayer(layer, lCanvas, globalTime, audioLevel);
+      timing.layers.push({ index: i + 1, type: layer.type, ms: performance.now() - t0 });
     }
 
     // Composite
@@ -1401,16 +1408,20 @@ export class LiquidShowVisualizer {
     // Draw to main canvas
     ctx.drawImage(this.compCanvas, 0, 0);
 
-    // Post-processing
-    this._postProcess(w, h, audio);
+    // Post-processing (with timing)
+    this._postProcess(w, h, audio, timing);
+    timing.total = performance.now() - drawStart;
   }
 
-  _postProcess(w, h, audio) {
+  _postProcess(w, h, audio, timing) {
     const ctx = this.ctx;
     const { bloom, softness, contrast, saturation, grain, bw, threshold, density, bwGlow } = this.globals;
+    const post = timing ? timing.post = {} : null;
+    let t0;
 
     // Bloom
     if (bloom > 0.01) {
+      t0 = performance.now();
       this.bloomCanvas.width = w;
       this.bloomCanvas.height = h;
       this.bloomCtx.drawImage(this.canvas, 0, 0);
@@ -1421,26 +1432,32 @@ export class LiquidShowVisualizer {
       ctx.filter = 'none';
       ctx.globalAlpha = 1;
       ctx.globalCompositeOperation = 'source-over';
+      if (post) post.bloom = performance.now() - t0;
     }
 
     // Softness
     if (softness > 0.05) {
+      t0 = performance.now();
       ctx.filter = `blur(${Math.round(softness * 3)}px)`;
       ctx.drawImage(this.canvas, 0, 0);
       ctx.filter = 'none';
+      if (post) post.softness = performance.now() - t0;
     }
 
     // Contrast + Saturation
     const contrastVal = 0.6 + contrast * 1.4;
     const satVal = saturation * 2;
     if (Math.abs(contrastVal - 1) > 0.05 || Math.abs(satVal - 1) > 0.05) {
+      t0 = performance.now();
       ctx.filter = `contrast(${contrastVal}) saturate(${satVal})`;
       ctx.drawImage(this.canvas, 0, 0);
       ctx.filter = 'none';
+      if (post) post.contrast = performance.now() - t0;
     }
 
     // B&W mode
     if (bw) {
+      t0 = performance.now();
       const cVal = 1 + threshold * 2;
       const bVal = 0.6 + density * 0.8;
       ctx.filter = `grayscale(1) contrast(${cVal}) brightness(${bVal})`;
@@ -1460,10 +1477,12 @@ export class LiquidShowVisualizer {
         ctx.globalAlpha = 1;
         ctx.globalCompositeOperation = 'source-over';
       }
+      if (post) post.bw = performance.now() - t0;
     }
 
     // Grain (global — applied once over the final composite)
     if (grain > 0.01) {
+      t0 = performance.now();
       // Use a small buffer (1/4 res) for performance, then stretch it
       const gw = Math.ceil(w / 4), gh = Math.ceil(h / 4);
       if (!this._grainCanvas) {
@@ -1493,6 +1512,7 @@ export class LiquidShowVisualizer {
       ctx.imageSmoothingEnabled = true;
       ctx.globalAlpha = 1;
       ctx.globalCompositeOperation = 'source-over';
+      if (post) post.grain = performance.now() - t0;
     }
   }
 

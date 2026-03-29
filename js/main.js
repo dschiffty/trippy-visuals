@@ -723,6 +723,7 @@ class App {
       <div class="debug-line"><span class="debug-label">Preset</span> <span id="dbg-preset">--</span></div>
       <div class="debug-line"><span class="debug-label">Audio</span> <span id="dbg-audio">--</span></div>
       <div class="debug-line"><span class="debug-label">Quality</span> <span id="dbg-quality">--</span></div>
+      <div id="dbg-timing" class="debug-timing"></div>
       <div id="dbg-frozen" class="debug-frozen" style="display:none">FROZEN</div>
       <div id="dbg-freeze-tap" class="debug-freeze-tap">⏸</div>
     `;
@@ -756,6 +757,25 @@ class App {
       .debug-label {
         color: #888;
         flex-shrink: 0;
+      }
+      .debug-timing {
+        border-top: 1px solid rgba(255,255,255,0.15);
+        margin-top: 4px;
+        padding-top: 4px;
+        font-size: 10px;
+        line-height: 1.4;
+      }
+      .debug-timing .debug-line {
+        font-size: 10px;
+      }
+      .debug-timing .dt-val {
+        color: #aaa;
+      }
+      .debug-timing .dt-total {
+        border-top: 1px solid rgba(255,255,255,0.1);
+        margin-top: 2px;
+        padding-top: 2px;
+        color: #fff;
       }
       #dbg-fps-dot {
         font-size: 9px;
@@ -808,6 +828,7 @@ class App {
       preset: document.getElementById('dbg-preset'),
       audio: document.getElementById('dbg-audio'),
       quality: document.getElementById('dbg-quality'),
+      timingEl: document.getElementById('dbg-timing'),
       frozenLabel: document.getElementById('dbg-frozen'),
       frozen: false,
       fpsHistory: [],
@@ -888,6 +909,26 @@ class App {
     const qPct = Math.round(this._qualityScale * 100);
     d.quality.textContent = `${qPct}%`;
     d.quality.style.color = qPct === 100 ? '#4caf50' : qPct >= 80 ? '#ffc107' : '#f44336';
+
+    // Per-layer and post-processing timing
+    const engine = this.activeVisualizer?.engine || this.activeVisualizer;
+    const timing = engine?._timing;
+    if (timing && d.timingEl) {
+      let html = '';
+      for (const l of timing.layers) {
+        html += `<div class="debug-line"><span class="debug-label">L${l.index} (${l.type})</span> <span class="dt-val">${l.ms.toFixed(1)}ms</span></div>`;
+      }
+      const postKeys = ['bloom', 'softness', 'contrast', 'bw', 'grain'];
+      for (const k of postKeys) {
+        if (timing.post[k] != null) {
+          html += `<div class="debug-line"><span class="debug-label">Post (${k})</span> <span class="dt-val">${timing.post[k].toFixed(1)}ms</span></div>`;
+        }
+      }
+      html += `<div class="debug-line dt-total"><span class="debug-label">Total draw</span> <span class="dt-val">${timing.total.toFixed(1)}ms</span></div>`;
+      d.timingEl.innerHTML = html;
+    } else if (d.timingEl) {
+      d.timingEl.innerHTML = '';
+    }
   }
 
   /* ---- Adaptive Quality ---- */
