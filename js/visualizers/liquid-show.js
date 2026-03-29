@@ -4,6 +4,7 @@
 
 import { GALLERY_IMAGES, getGalleryImage, getGalleryThumbnail } from '../image-gallery.js';
 import { LL_PRESETS } from './ll-presets.js';
+import { ImageWarpGPU } from './image-warp-gpu.js';
 
 // --- Simplex 2D Noise ---
 const F2 = 0.5 * (Math.sqrt(3) - 1);
@@ -230,6 +231,9 @@ export class LiquidShowVisualizer {
     this.compCtx = this.compCanvas.getContext('2d');
     this.bloomCanvas = document.createElement('canvas');
     this.bloomCtx = this.bloomCanvas.getContext('2d');
+
+    // GPU-accelerated image warp renderer (falls back to CPU if unavailable)
+    this._imageGPU = new ImageWarpGPU();
 
     // Panel
     this.panelEl = null;
@@ -638,13 +642,12 @@ export class LiquidShowVisualizer {
     const t = time * speed * 0.3;
     const audioMod = audioLevel * reactivity;
 
-    // Draw the source image to a temp canvas at buffer size if needed
+    // Prepare cover-fitted image canvas (shared by both GPU and CPU paths)
     if (!layer._imgCanvas || layer._imgCanvas.width !== bw || layer._imgCanvas.height !== bh) {
       layer._imgCanvas = document.createElement('canvas');
       layer._imgCanvas.width = bw;
       layer._imgCanvas.height = bh;
       const ic = layer._imgCanvas.getContext('2d');
-      // Cover-fit the image
       const img = layer.imageData;
       const imgAspect = img.width / img.height;
       const bufAspect = bw / bh;
@@ -658,43 +661,67 @@ export class LiquidShowVisualizer {
       }
       ic.drawImage(img, sx, sy, sw, sh, 0, 0, bw, bh);
       layer._imgPixels = ic.getImageData(0, 0, bw, bh).data;
+      // Invalidate GPU texture when buffer size changes
+      if (this._imageGPU.available) this._imageGPU.invalidateTexture();
     }
 
+    // --- GPU path ---
+    if (this._imageGPU.available) {
+      // Texture key: image src + buffer dimensions to detect changes
+      const texKey = (layer.imageData.src || layer.imageData._id || '') + '|' + bw + 'x' + bh;
+      this._imageGPU.uploadTexture(layer._imgCanvas, texKey);
+
+      const result = this._imageGPU.render(bw, bh, {
+        time: t,
+        scale,
+        drift,
+        rot: time * rotation * 0.2, // pre-computed rotation angle (radians)
+        distortion,
+        turbulence,
+        audioMod,
+        hueShift: layer.hue / 360,
+        offsetX: layer.offset.x,
+        offsetY: layer.offset.y,
+      });
+
+      ctx.drawImage(result, 0, 0);
+      return;
+    }
+
+    // --- CPU fallback ---
+    this._renderImageCPU(layer, ctx, bw, bh, time, audioLevel, t, audioMod);
+  }
+
+  _renderImageCPU(layer, ctx, bw, bh, time, audioLevel, t, audioMod) {
+    const { scale, turbulence, drift, rotation, distortion } = layer.params;
     const srcPixels = layer._imgPixels;
     const imageData = this._getImageData(ctx, bw, bh, layer);
     const data = imageData.data;
     const rot = time * rotation * 0.2;
     const cosR = Math.cos(rot), sinR = Math.sin(rot);
     const hueShift = layer.hue / 360;
-    // Audio-boosted distortion
     const audioDist = distortion + audioMod * 1.0;
     const audioScl = scale * (1 + audioMod * 0.4);
 
     for (let py = 0; py < bh; py++) {
       for (let px = 0; px < bw; px++) {
-        // Normalized coords centered at origin
         let nx = (px / bw - 0.5) * audioScl * 2;
         let ny = (py / bh - 0.5) * audioScl * 2;
 
-        // Rotation
         const rx = nx * cosR - ny * sinR;
         const ry = nx * sinR + ny * cosR;
         nx = rx + t * drift * 0.3;
         ny = ry + t * drift * 0.2;
 
-        // Domain warp — distort the UV sampling
         const warpX = fbm(nx * 0.8 + layer.offset.x, ny * 0.8 + layer.offset.y + t * 0.1, 2) * audioDist * 2;
         const warpY = fbm(nx * 0.8 + layer.offset.x + 5.2, ny * 0.8 + layer.offset.y + 1.3 + t * 0.08, 2) * audioDist * 2;
 
-        // Turbulence adds high-freq ripple
         const ripple = turbulence > 0.01 ?
           noise2D((nx + warpX) * 4, (ny + warpY) * 4 + t * 0.3) * turbulence * audioDist * 0.5 : 0;
 
-        // Map back to pixel coordinates
         let srcX = ((nx + warpX + ripple) / (audioScl * 2) + 0.5) * bw;
         let srcY = ((ny + warpY + ripple) / (audioScl * 2) + 0.5) * bh;
 
-        // Wrap around
         srcX = ((srcX % bw) + bw) % bw;
         srcY = ((srcY % bh) + bh) % bh;
 
@@ -703,7 +730,6 @@ export class LiquidShowVisualizer {
         let g = srcPixels[si + 1] || 0;
         let b = srcPixels[si + 2] || 0;
 
-        // Hue shift — rotate color in RGB space (fast approximate)
         if (hueShift > 0.01) {
           const angle = hueShift * Math.PI * 2;
           const cs = Math.cos(angle), sn = Math.sin(angle);
@@ -721,7 +747,6 @@ export class LiquidShowVisualizer {
           b = Math.max(0, Math.min(255, nb));
         }
 
-        // Audio brightness boost
         const brightBoost = 1 + audioMod * 0.6;
         r = Math.min(255, r * brightBoost);
         g = Math.min(255, g * brightBoost);
