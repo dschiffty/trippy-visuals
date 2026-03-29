@@ -1556,21 +1556,21 @@ export class LiquidShowVisualizer {
     const presetLabel = document.createElement('label');
     presetLabel.textContent = 'Saved Presets';
     presetLabel.style.cssText = 'font-size:10px;font-weight:bold;color:#000;margin-right:4px;';
-    const presetSelect = document.createElement('select');
-    presetSelect.className = 'll-preset-select';
-    presetSelect.style.cssText = 'font-size:10px;max-width:180px;';
+    this._presetSelect = document.createElement('select');
+    this._presetSelect.className = 'll-preset-select';
+    this._presetSelect.style.cssText = 'font-size:10px;max-width:180px;';
     const defaultOpt = document.createElement('option');
     defaultOpt.value = '';
     defaultOpt.textContent = '— Select —';
-    presetSelect.appendChild(defaultOpt);
+    this._presetSelect.appendChild(defaultOpt);
     LL_PRESETS.forEach(p => {
       const opt = document.createElement('option');
       opt.value = p.id;
       opt.textContent = p.name;
-      presetSelect.appendChild(opt);
+      this._presetSelect.appendChild(opt);
     });
-    presetSelect.addEventListener('change', () => {
-      const id = presetSelect.value;
+    this._presetSelect.addEventListener('change', () => {
+      const id = this._presetSelect.value;
       if (!id) return;
       const preset = LL_PRESETS.find(p => p.id === id);
       if (preset) {
@@ -1580,7 +1580,7 @@ export class LiquidShowVisualizer {
       }
     });
     presetRow.appendChild(presetLabel);
-    presetRow.appendChild(presetSelect);
+    presetRow.appendChild(this._presetSelect);
     panel.appendChild(presetRow);
 
     const layout = document.createElement('div');
@@ -2284,6 +2284,8 @@ export class LiquidShowVisualizer {
         this._randomizeLayerAt(idx);
       }
       this.selectedLayerIndex = [...this.selectedLayerIndices][0];
+      this._currentPresetId = null;
+      if (this._presetSelect) this._presetSelect.value = '';
       this._rebuildLayerList();
       this._rebuildLayerKnobs();
       this._pushHistory();
@@ -2628,6 +2630,7 @@ export class LiquidShowVisualizer {
 
   _randomizeAllLayersInternal() {
     this._currentPresetId = null;
+    if (this._presetSelect) this._presetSelect.value = '';
     this.layers.forEach(layer => {
       const newType = LAYER_TYPES[Math.floor(Math.random() * LAYER_TYPES.length)];
       layer.type = newType;
@@ -2659,6 +2662,8 @@ export class LiquidShowVisualizer {
   }
 
   _randomizeAllLayers() {
+    this._currentPresetId = null;
+    if (this._presetSelect) this._presetSelect.value = '';
     // Skip locked layers when called interactively
     this.layers.forEach(layer => {
       if (layer.locked) return;

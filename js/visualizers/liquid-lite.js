@@ -45,8 +45,8 @@ export class LiquidLiteVisualizer {
     const presetSelector = LiquidShowVisualizer.buildPresetSelector(state => {
       this.engine.setState(state);
     });
-    const select = presetSelector.querySelector('select');
-    if (select && this._currentPresetId) select.value = this._currentPresetId;
+    this._presetSelect = presetSelector.querySelector('select');
+    if (this._presetSelect && this._currentPresetId) this._presetSelect.value = this._currentPresetId;
     panel.appendChild(presetSelector);
 
     // Mic toggle button with long-press gain control
@@ -90,6 +90,7 @@ export class LiquidLiteVisualizer {
     randomBtn.textContent = '\uD83C\uDFB2 Randomize';
     randomBtn.addEventListener('click', () => {
       this.engine._randomizeAllLayersInternal();
+      if (this._presetSelect) this._presetSelect.value = '';
     });
     panel.appendChild(randomBtn);
 
@@ -120,6 +121,7 @@ export class LiquidLiteVisualizer {
     if (this._app) this._app.mic.onStateChange = null;
     if (this.panelEl) { this.panelEl.remove(); this.panelEl = null; }
     this._micBtn = null;
+    this._presetSelect = null;
     this._controlPanelEl?.classList.remove('ll-active', 'll-ui-hidden');
 
   }
