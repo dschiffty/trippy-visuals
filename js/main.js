@@ -893,12 +893,12 @@ class App {
   /* ---- Adaptive Quality ---- */
 
   _adaptiveQualityUpdate(fps, timestamp) {
-    const LOW_THRESHOLD = 45;
-    const HIGH_THRESHOLD = 55;
-    const LOW_DURATION = 2000;   // ms below threshold before stepping down
+    const LOW_THRESHOLD = 30;
+    const HIGH_THRESHOLD = 45;
+    const LOW_DURATION = 4000;   // ms below threshold before stepping down
     const HIGH_DURATION = 5000;  // ms above threshold before stepping up
     const STEP = 0.1;
-    const MIN_SCALE = 0.5;
+    const MIN_SCALE = 0.8;
     const MAX_SCALE = 1.0;
 
     if (fps < LOW_THRESHOLD) {
