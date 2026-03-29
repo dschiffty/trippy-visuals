@@ -64,7 +64,7 @@ float snoise(vec2 v) {
   vec3 g;
   g.x = a0.x * x0.x + h.x * x0.y;
   g.yz = a0.yz * x12.xz + h.yz * x12.yw;
-  return 130.0 * dot(m, g);
+  return 70.0 * dot(m, g);
 }
 
 float fbm(vec2 p, int octaves) {
@@ -200,6 +200,7 @@ export class ImageWarpGPU {
 
     // Create texture
     const texture = gl.createTexture();
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, texture);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
