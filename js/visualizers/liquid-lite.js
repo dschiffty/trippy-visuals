@@ -41,15 +41,59 @@ export class LiquidLiteVisualizer {
     const panel = document.createElement('div');
     panel.className = 'll-lite-panel';
 
+    // --- Slider row (Gain, Intensity, Dynamic) ---
+    const sliderRow = document.createElement('div');
+    sliderRow.className = 'll-slider-row';
+
+    const makeSlider = (label, min, max, step, value, onChange) => {
+      const group = document.createElement('div');
+      group.className = 'll-slider-group';
+      const lbl = document.createElement('span');
+      lbl.className = 'll-slider-label';
+      lbl.textContent = label;
+      const input = document.createElement('input');
+      input.type = 'range';
+      input.className = 'll-slider-input';
+      input.min = min;
+      input.max = max;
+      input.step = step;
+      input.value = value;
+      input.addEventListener('input', () => onChange(parseFloat(input.value)));
+      group.appendChild(lbl);
+      group.appendChild(input);
+      return { group, input };
+    };
+
+    const gainSlider = makeSlider('Gain', 0.5, 10, 0.5, app?.mic.gainValue ?? 2, (v) => {
+      if (app) app.setMicGain(v);
+    });
+    sliderRow.appendChild(gainSlider.group);
+
+    const intensitySlider = makeSlider('Intensity', 0, 1, 0.05, this.engine.globals.turbulence, (v) => {
+      this.engine.globals.turbulence = v;
+    });
+    sliderRow.appendChild(intensitySlider.group);
+
+    const dynamicSlider = makeSlider('Dynamic', 0, 1, 0.05, this.engine.globals.journey, (v) => {
+      this.engine.globals.journey = v;
+    });
+    sliderRow.appendChild(dynamicSlider.group);
+
+    panel.appendChild(sliderRow);
+
+    // --- Main button row ---
+    const buttonRow = document.createElement('div');
+    buttonRow.className = 'll-button-row';
+
     // Preset selector
     const presetSelector = LiquidShowVisualizer.buildPresetSelector(state => {
       this.engine.setState(state);
     });
     const select = presetSelector.querySelector('select');
     if (select && this._currentPresetId) select.value = this._currentPresetId;
-    panel.appendChild(presetSelector);
+    buttonRow.appendChild(presetSelector);
 
-    // Mic toggle button with long-press gain control
+    // Mic toggle button (simple tap only)
     const micBtn = document.createElement('button');
     micBtn.className = 'll-lite-mic';
     micBtn.innerHTML = '<span class="mic-icon">🎤</span>';
@@ -61,28 +105,8 @@ export class LiquidLiteVisualizer {
       this._startLevelMonitor();
     }
 
-    // Short tap = toggle mic, long press = open gain popover
-    let longPressTimer = null;
-    let didLongPress = false;
-    const startPress = () => {
-      didLongPress = false;
-      longPressTimer = setTimeout(() => {
-        didLongPress = true;
-        this._showGainPopover(micBtn);
-      }, 500);
-    };
-    const endPress = () => {
-      clearTimeout(longPressTimer);
-      if (!didLongPress) this._toggleMic();
-    };
-    const cancelPress = () => { clearTimeout(longPressTimer); };
-    micBtn.addEventListener('touchstart', startPress, { passive: true });
-    micBtn.addEventListener('touchend', (e) => { e.preventDefault(); endPress(); });
-    micBtn.addEventListener('touchcancel', cancelPress);
-    micBtn.addEventListener('mousedown', startPress);
-    micBtn.addEventListener('mouseup', endPress);
-    micBtn.addEventListener('mouseleave', cancelPress);
-    panel.appendChild(micBtn);
+    micBtn.addEventListener('click', () => this._toggleMic());
+    buttonRow.appendChild(micBtn);
 
     // Randomize button
     const randomBtn = document.createElement('button');
@@ -91,8 +115,9 @@ export class LiquidLiteVisualizer {
     randomBtn.addEventListener('click', () => {
       this.engine._randomizeAllLayersInternal();
     });
-    panel.appendChild(randomBtn);
+    buttonRow.appendChild(randomBtn);
 
+    panel.appendChild(buttonRow);
     controlPanelEl.appendChild(panel);
     this.panelEl = panel;
 
@@ -114,7 +139,6 @@ export class LiquidLiteVisualizer {
   }
 
   destroyPanel() {
-    this._dismissGainPopover();
     this._stopLevelMonitor();
     // Do NOT stop the mic — it persists across mode switches
     if (this._app) this._app.mic.onStateChange = null;
@@ -170,53 +194,4 @@ export class LiquidLiteVisualizer {
     setTimeout(() => msg.remove(), 4000);
   }
 
-  // --- Gain Popover ---
-
-  _showGainPopover(anchorEl) {
-    this._dismissGainPopover();
-    if (!this._app) return;
-
-    const popover = document.createElement('div');
-    popover.className = 'll-gain-popover';
-
-    const label = document.createElement('div');
-    label.className = 'll-gain-label';
-    label.textContent = `Mic Gain: ${this._app.mic.gainValue.toFixed(1)}x`;
-    popover.appendChild(label);
-
-    const slider = document.createElement('input');
-    slider.type = 'range';
-    slider.className = 'll-gain-slider';
-    slider.min = '0.5';
-    slider.max = '10';
-    slider.step = '0.5';
-    slider.value = this._app.mic.gainValue;
-    slider.addEventListener('input', () => {
-      this._app.setMicGain(parseFloat(slider.value));
-      label.textContent = `Mic Gain: ${this._app.mic.gainValue.toFixed(1)}x`;
-    });
-    popover.appendChild(slider);
-
-    this.panelEl.appendChild(popover);
-    this._gainPopover = popover;
-
-    setTimeout(() => {
-      this._dismissGainHandler = (e) => {
-        if (!popover.contains(e.target) && e.target !== anchorEl && !anchorEl.contains(e.target)) {
-          this._dismissGainPopover();
-        }
-      };
-      document.addEventListener('click', this._dismissGainHandler, true);
-      document.addEventListener('touchstart', this._dismissGainHandler, true);
-    }, 10);
-  }
-
-  _dismissGainPopover() {
-    if (this._gainPopover) { this._gainPopover.remove(); this._gainPopover = null; }
-    if (this._dismissGainHandler) {
-      document.removeEventListener('click', this._dismissGainHandler, true);
-      document.removeEventListener('touchstart', this._dismissGainHandler, true);
-      this._dismissGainHandler = null;
-    }
-  }
 }
