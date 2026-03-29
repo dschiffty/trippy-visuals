@@ -33,6 +33,12 @@ class App {
     this.targetFps = 60;
     this.lastFrameTime = 0;
 
+    // Adaptive quality system
+    this._qualityScale = 1.0;       // 1.0 = full CSS resolution, 0.5 = half
+    this._qualityFpsHistory = [];    // rolling FPS samples for adaptive decisions
+    this._qualityLowSince = 0;      // timestamp when FPS first dropped below threshold
+    this._qualityHighSince = 0;     // timestamp when FPS first exceeded high threshold
+
     // Shared mic input state (persists across mode switches)
     this.mic = {
       active: false,
@@ -88,6 +94,9 @@ class App {
     this.setupFullscreenBehavior();
     this.setupFpsDropdown();
     this.resizeCanvas();
+
+    // Pre-warm all renderers to avoid JIT compilation stalls
+    this._preWarmRenderers();
 
     // Start visual demo immediately so the app feels alive on load
     this.startAnimation();
@@ -382,7 +391,9 @@ class App {
       // FPS counter
       this.frameCount++;
       if (timestamp - this.lastFpsTime >= 1000) {
-        this.fpsText.textContent = `${this.frameCount} fps`;
+        const currentFps = this.frameCount;
+        this.fpsText.textContent = `${currentFps} fps`;
+        this._adaptiveQualityUpdate(currentFps, timestamp);
         this.frameCount = 0;
         this.lastFpsTime = timestamp;
       }
@@ -711,6 +722,7 @@ class App {
       <div class="debug-line"><span class="debug-label">Mode</span> <span id="dbg-mode">--</span></div>
       <div class="debug-line"><span class="debug-label">Preset</span> <span id="dbg-preset">--</span></div>
       <div class="debug-line"><span class="debug-label">Audio</span> <span id="dbg-audio">--</span></div>
+      <div class="debug-line"><span class="debug-label">Quality</span> <span id="dbg-quality">--</span></div>
       <div id="dbg-frozen" class="debug-frozen" style="display:none">FROZEN</div>
       <div id="dbg-freeze-tap" class="debug-freeze-tap">⏸</div>
     `;
@@ -795,6 +807,7 @@ class App {
       mode: document.getElementById('dbg-mode'),
       preset: document.getElementById('dbg-preset'),
       audio: document.getElementById('dbg-audio'),
+      quality: document.getElementById('dbg-quality'),
       frozenLabel: document.getElementById('dbg-frozen'),
       frozen: false,
       fpsHistory: [],
@@ -870,6 +883,69 @@ class App {
 
     // Audio source
     d.audio.textContent = this.mic.active ? 'Mic' : this.audio.isCapturing ? 'System' : 'Demo';
+
+    // Quality scale
+    const qPct = Math.round(this._qualityScale * 100);
+    d.quality.textContent = `${qPct}%`;
+    d.quality.style.color = qPct === 100 ? '#4caf50' : qPct >= 80 ? '#ffc107' : '#f44336';
+  }
+
+  /* ---- Adaptive Quality ---- */
+
+  _adaptiveQualityUpdate(fps, timestamp) {
+    const LOW_THRESHOLD = 45;
+    const HIGH_THRESHOLD = 55;
+    const LOW_DURATION = 2000;   // ms below threshold before stepping down
+    const HIGH_DURATION = 5000;  // ms above threshold before stepping up
+    const STEP = 0.1;
+    const MIN_SCALE = 0.5;
+    const MAX_SCALE = 1.0;
+
+    if (fps < LOW_THRESHOLD) {
+      this._qualityHighSince = 0;
+      if (!this._qualityLowSince) {
+        this._qualityLowSince = timestamp;
+      } else if (timestamp - this._qualityLowSince > LOW_DURATION) {
+        const newScale = Math.max(MIN_SCALE, this._qualityScale - STEP);
+        if (newScale !== this._qualityScale) {
+          this._qualityScale = Math.round(newScale * 100) / 100;
+          this.resizeCanvas();
+        }
+        this._qualityLowSince = timestamp; // reset for next step
+      }
+    } else if (fps > HIGH_THRESHOLD) {
+      this._qualityLowSince = 0;
+      if (!this._qualityHighSince) {
+        this._qualityHighSince = timestamp;
+      } else if (timestamp - this._qualityHighSince > HIGH_DURATION && this._qualityScale < MAX_SCALE) {
+        const newScale = Math.min(MAX_SCALE, this._qualityScale + STEP);
+        this._qualityScale = Math.round(newScale * 100) / 100;
+        this.resizeCanvas();
+        this._qualityHighSince = timestamp;
+      }
+    } else {
+      // In the acceptable range — reset both timers
+      this._qualityLowSince = 0;
+      this._qualityHighSince = 0;
+    }
+  }
+
+  _preWarmRenderers() {
+    // Run a few silent frames through each visualizer to warm up JIT and canvas contexts
+    const synth = this._generateSyntheticAudio(0);
+    const savedViz = this.activeVisualizer;
+    const savedKey = this.activeKey;
+    for (const [key, viz] of Object.entries(this.visualizers)) {
+      try {
+        viz.draw(synth.frequency, synth.timeDomain);
+        viz.draw(synth.frequency, synth.timeDomain);
+      } catch (_) { /* ignore errors during warmup */ }
+    }
+    // Restore and clear canvas
+    this.activeVisualizer = savedViz;
+    this.activeKey = savedKey;
+    const ctx = this.canvas.getContext('2d');
+    ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
   }
 
   /* ---- Canvas ---- */
@@ -877,8 +953,22 @@ class App {
   resizeCanvas() {
     const container = this.canvas.parentElement;
     const rect = container.getBoundingClientRect();
-    this.canvas.width = rect.width;
-    this.canvas.height = rect.height;
+    const cssW = rect.width;
+    const cssH = rect.height;
+
+    // Render at reduced resolution for performance.
+    // _qualityScale ranges from 0.5 to 1.0 (adaptive quality system).
+    // On Retina displays, even scale=1.0 means we render at CSS pixels (not device pixels),
+    // which is already half the native resolution at DPR 2.
+    const scale = this._qualityScale;
+    const renderW = Math.round(cssW * scale);
+    const renderH = Math.round(cssH * scale);
+
+    // CSS size = full container; buffer = scaled render resolution
+    this.canvas.style.width = cssW + 'px';
+    this.canvas.style.height = cssH + 'px';
+    this.canvas.width = renderW;
+    this.canvas.height = renderH;
   }
 
   drawIdleScreen() {
@@ -944,7 +1034,10 @@ class App {
         this.windowEl.classList.remove('fullscreen-mode', 'show-ui');
         clearTimeout(this.fsHideTimer);
       }
-      // Re-fit canvas after layout change
+      // Reset adaptive quality and re-fit canvas after layout change
+      this._qualityScale = 1.0;
+      this._qualityLowSince = 0;
+      this._qualityHighSince = 0;
       setTimeout(() => this.resizeCanvas(), 50);
     });
   }
