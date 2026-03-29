@@ -104,6 +104,11 @@ class App {
       setTimeout(() => this.resizeCanvas(), 300);
     });
     window.addEventListener('resize', () => this.resizeCanvas());
+
+    // Debug HUD (activated via ?debug=true)
+    if (new URLSearchParams(window.location.search).get('debug') === 'true') {
+      this._setupDebugHUD();
+    }
   }
 
   /* ---- Controls ---- */
@@ -381,6 +386,9 @@ class App {
         this.frameCount = 0;
         this.lastFpsTime = timestamp;
       }
+
+      // Debug HUD
+      if (this._debugHUD) this._updateDebugHUD(timestamp);
 
       // Dynamic knob animation
       this.controls.updateDynamic(timestamp);
@@ -688,6 +696,180 @@ class App {
   setMicGain(value) {
     this.mic.gainValue = value;
     if (this.mic.gainNode) this.mic.gainNode.gain.value = value;
+  }
+
+  /* ---- Debug HUD ---- */
+
+  _setupDebugHUD() {
+    const hud = document.createElement('div');
+    hud.id = 'debug-hud';
+    hud.innerHTML = `
+      <div class="debug-line"><span class="debug-label">FPS</span> <span id="dbg-fps">--</span> <span id="dbg-fps-dot">●</span></div>
+      <div class="debug-line"><span class="debug-label">Target</span> <span id="dbg-target">--</span></div>
+      <div class="debug-line"><span class="debug-label">Canvas</span> <span id="dbg-canvas">--</span></div>
+      <div class="debug-line"><span class="debug-label">DPR</span> <span id="dbg-dpr">--</span></div>
+      <div class="debug-line"><span class="debug-label">Mode</span> <span id="dbg-mode">--</span></div>
+      <div class="debug-line"><span class="debug-label">Preset</span> <span id="dbg-preset">--</span></div>
+      <div class="debug-line"><span class="debug-label">Audio</span> <span id="dbg-audio">--</span></div>
+      <div id="dbg-frozen" class="debug-frozen" style="display:none">FROZEN</div>
+      <div id="dbg-freeze-tap" class="debug-freeze-tap">⏸</div>
+    `;
+    document.body.appendChild(hud);
+
+    // Inject styles
+    const style = document.createElement('style');
+    style.textContent = `
+      #debug-hud {
+        position: fixed;
+        top: 8px;
+        right: 8px;
+        z-index: 10000;
+        background: rgba(0, 0, 0, 0.75);
+        color: #ccc;
+        font-family: 'SF Mono', 'Menlo', 'Monaco', 'Consolas', monospace;
+        font-size: 11px;
+        line-height: 1.5;
+        padding: 8px 10px;
+        border-radius: 6px;
+        pointer-events: none;
+        min-width: 180px;
+        backdrop-filter: blur(4px);
+        -webkit-backdrop-filter: blur(4px);
+      }
+      .debug-line {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+      }
+      .debug-label {
+        color: #888;
+        flex-shrink: 0;
+      }
+      #dbg-fps-dot {
+        font-size: 9px;
+        margin-left: 4px;
+      }
+      .debug-frozen {
+        text-align: center;
+        color: #ff6b6b;
+        font-weight: bold;
+        font-size: 10px;
+        letter-spacing: 2px;
+        margin-top: 4px;
+        animation: debug-blink 1s ease-in-out infinite;
+      }
+      @keyframes debug-blink {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.4; }
+      }
+      .debug-freeze-tap {
+        position: absolute;
+        bottom: -28px;
+        right: 0;
+        width: 24px;
+        height: 24px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(0,0,0,0.6);
+        border-radius: 50%;
+        font-size: 12px;
+        cursor: pointer;
+        pointer-events: auto;
+        opacity: 0.5;
+        user-select: none;
+        -webkit-user-select: none;
+      }
+      .debug-freeze-tap:hover { opacity: 1; }
+    `;
+    document.head.appendChild(style);
+
+    // State
+    this._debugHUD = {
+      el: hud,
+      fps: document.getElementById('dbg-fps'),
+      fpsDot: document.getElementById('dbg-fps-dot'),
+      target: document.getElementById('dbg-target'),
+      canvas: document.getElementById('dbg-canvas'),
+      dpr: document.getElementById('dbg-dpr'),
+      mode: document.getElementById('dbg-mode'),
+      preset: document.getElementById('dbg-preset'),
+      audio: document.getElementById('dbg-audio'),
+      frozenLabel: document.getElementById('dbg-frozen'),
+      frozen: false,
+      fpsHistory: [],
+      lastUpdate: 0,
+    };
+
+    // Freeze toggle via F key (desktop)
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'f' || e.key === 'F') {
+        if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA') return;
+        this._toggleDebugFreeze();
+      }
+    });
+
+    // Freeze toggle via tap target (mobile)
+    document.getElementById('dbg-freeze-tap').addEventListener('click', () => this._toggleDebugFreeze());
+    document.getElementById('dbg-freeze-tap').addEventListener('touchend', (e) => {
+      e.preventDefault();
+      this._toggleDebugFreeze();
+    });
+  }
+
+  _toggleDebugFreeze() {
+    if (!this._debugHUD) return;
+    this._debugHUD.frozen = !this._debugHUD.frozen;
+    this._debugHUD.frozenLabel.style.display = this._debugHUD.frozen ? 'block' : 'none';
+    const tap = document.getElementById('dbg-freeze-tap');
+    if (tap) tap.textContent = this._debugHUD.frozen ? '▶' : '⏸';
+  }
+
+  _updateDebugHUD(timestamp) {
+    if (!this._debugHUD || this._debugHUD.frozen) return;
+
+    // Track FPS via rolling window
+    this._debugHUD.fpsHistory.push(timestamp);
+    const cutoff = timestamp - 1000;
+    while (this._debugHUD.fpsHistory.length > 0 && this._debugHUD.fpsHistory[0] < cutoff) {
+      this._debugHUD.fpsHistory.shift();
+    }
+
+    // Update once per second
+    if (timestamp - this._debugHUD.lastUpdate < 1000) return;
+    this._debugHUD.lastUpdate = timestamp;
+
+    const fps = this._debugHUD.fpsHistory.length;
+    const d = this._debugHUD;
+
+    d.fps.textContent = fps;
+    // Color coding
+    const color = fps >= 50 ? '#4caf50' : fps >= 30 ? '#ffc107' : '#f44336';
+    d.fps.style.color = color;
+    d.fpsDot.style.color = color;
+
+    d.target.textContent = this.targetFps + ' fps';
+    d.canvas.textContent = `${this.canvas.width}×${this.canvas.height}`;
+    d.dpr.textContent = (window.devicePixelRatio || 1).toFixed(1);
+
+    // Mode
+    const modeLabel = VIZ_CLASSES[this.activeKey]?.label || this.activeKey;
+    d.mode.textContent = modeLabel;
+
+    // Preset (for Liquid Lite, show selected preset name)
+    const viz = this.activeVisualizer;
+    let presetName = '—';
+    if (viz?._currentPresetId) {
+      const found = (LiquidShowVisualizer.presets || []).find(p => p.id === viz._currentPresetId);
+      if (found) presetName = found.name;
+    } else if (viz?.engine?._currentPresetId) {
+      const found = (LiquidShowVisualizer.presets || []).find(p => p.id === viz.engine._currentPresetId);
+      if (found) presetName = found.name;
+    }
+    d.preset.textContent = presetName;
+
+    // Audio source
+    d.audio.textContent = this.mic.active ? 'Mic' : this.audio.isCapturing ? 'System' : 'Demo';
   }
 
   /* ---- Canvas ---- */
