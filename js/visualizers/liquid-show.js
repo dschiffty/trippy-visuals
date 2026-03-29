@@ -1554,6 +1554,7 @@ export class LiquidShowVisualizer {
       if (!id) return;
       const preset = LL_PRESETS.find(p => p.id === id);
       if (preset) {
+        this._currentPresetId = preset.id;
         this.setState(JSON.parse(JSON.stringify(preset.vizState)));
         this._pushHistory();
       }
@@ -2606,6 +2607,7 @@ export class LiquidShowVisualizer {
   }
 
   _randomizeAllLayersInternal() {
+    this._currentPresetId = null;
     this.layers.forEach(layer => {
       const newType = LAYER_TYPES[Math.floor(Math.random() * LAYER_TYPES.length)];
       layer.type = newType;
