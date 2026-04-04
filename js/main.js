@@ -214,6 +214,9 @@ class App {
         this._mobileUIHidden = !this._mobileUIHidden;
         this._updateMobileUIVisibility();
       });
+
+      // Screen Wake Lock — keep display on while visualizer is active
+      this._setupWakeLock();
     }
 
     // Start button
@@ -492,6 +495,25 @@ class App {
     }
 
     return { frequency: freq, timeDomain: time };
+  }
+
+  /* ---- Screen Wake Lock ---- */
+
+  _setupWakeLock() {
+    if (!('wakeLock' in navigator)) return;
+    this._wakeLock = null;
+
+    const acquire = async () => {
+      try {
+        this._wakeLock = await navigator.wakeLock.request('screen');
+        this._wakeLock.addEventListener('release', () => { this._wakeLock = null; });
+      } catch { /* fail silently */ }
+    };
+
+    acquire();
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') acquire();
+    });
   }
 
   /* ---- Mobile UI Toggle ---- */
