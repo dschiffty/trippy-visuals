@@ -503,17 +503,30 @@ class App {
     if (!('wakeLock' in navigator)) return;
     this._wakeLock = null;
 
-    const acquire = async () => {
+    this._acquireWakeLock = async () => {
+      if (this._wakeLock) return;
       try {
         this._wakeLock = await navigator.wakeLock.request('screen');
         this._wakeLock.addEventListener('release', () => { this._wakeLock = null; });
       } catch { /* fail silently */ }
     };
 
-    acquire();
+    // Attempt immediately (works if page already has user gesture)
+    this._acquireWakeLock();
+
+    // Re-acquire when returning to the tab
     document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'visible') acquire();
+      if (document.visibilityState === 'visible') this._acquireWakeLock();
     });
+
+    // Acquire on first user interaction (needed on iOS/mobile where
+    // wake lock requires a user gesture)
+    const gestureEvents = ['touchstart', 'click'];
+    const onGesture = () => {
+      this._acquireWakeLock();
+      gestureEvents.forEach(e => document.removeEventListener(e, onGesture, true));
+    };
+    gestureEvents.forEach(e => document.addEventListener(e, onGesture, { capture: true, once: false }));
   }
 
   /* ---- Mobile UI Toggle ---- */
