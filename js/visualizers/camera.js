@@ -211,6 +211,7 @@ export class CameraVisualizer {
     this._cameraFailed = false;
     this._cameraBlend = 0.7;
     this._warpMode = 'none';
+    this._effectsHidden = false;
     this._floatingEls = []; // track floating UI elements for hide/show
 
     const preset = LL_PRESETS[Math.floor(Math.random() * LL_PRESETS.length)];
@@ -228,9 +229,10 @@ export class CameraVisualizer {
     const h = this.canvas.height;
     ctx.clearRect(0, 0, w, h);
 
-    if (this.camera.active && this._cameraBlend > 0.01) {
-      ctx.globalAlpha = this._cameraBlend;
-      const needsWarp = this._warpMode !== 'none';
+    const blend = this._effectsHidden ? 1 : this._cameraBlend;
+    if (this.camera.active && blend > 0.01) {
+      ctx.globalAlpha = blend;
+      const needsWarp = this._warpMode !== 'none' && !this._effectsHidden;
       const isFront = this.camera.facingMode === 'user';
       const video = this.camera.video;
 
@@ -242,15 +244,18 @@ export class CameraVisualizer {
       ctx.globalAlpha = 1;
     }
 
-    if (this.camera.active) {
-      const prevOp = ctx.globalCompositeOperation;
-      ctx.globalCompositeOperation = 'source-over';
-      this.engine._cameraMode = true;
-      this.engine.draw(freq, time);
-      ctx.globalCompositeOperation = prevOp;
-    } else {
-      this.engine._cameraMode = false;
-      this.engine.draw(freq, time);
+    // Skip effects rendering when hidden
+    if (!this._effectsHidden) {
+      if (this.camera.active) {
+        const prevOp = ctx.globalCompositeOperation;
+        ctx.globalCompositeOperation = 'source-over';
+        this.engine._cameraMode = true;
+        this.engine.draw(freq, time);
+        ctx.globalCompositeOperation = prevOp;
+      } else {
+        this.engine._cameraMode = false;
+        this.engine.draw(freq, time);
+      }
     }
   }
 
@@ -314,6 +319,17 @@ export class CameraVisualizer {
     this._lensContainer = document.createElement('div');
     this._lensContainer.className = 'cam-lens-container';
     leftStack.appendChild(this._lensContainer);
+
+    // Effects toggle (clean camera passthrough)
+    const effectsBtn = this._makeFloatBtn('✦', 'Toggle effects');
+    effectsBtn.classList.add('cam-effects-toggle');
+    this._effectsBtn = effectsBtn;
+    effectsBtn.addEventListener('click', () => {
+      this._effectsHidden = !this._effectsHidden;
+      effectsBtn.classList.toggle('cam-effects-off', this._effectsHidden);
+      effectsBtn.innerHTML = this._effectsHidden ? '✦' : '✦';
+    });
+    leftStack.appendChild(effectsBtn);
 
     // Mic toggle
     const micBtn = this._makeFloatBtn('🎤', 'Mic');
@@ -508,6 +524,7 @@ export class CameraVisualizer {
     this._lensContainer = null;
     this._warpMenu = null;
     this._warpBtn = null;
+    this._effectsBtn = null;
     this._controlPanelEl?.classList.remove('ll-active', 'll-ui-hidden');
   }
 

@@ -992,6 +992,18 @@ html, body {
   box-shadow: 0 0 10px rgba(46, 204, 64, 0.5);
 }
 
+/* Effects toggle button */
+.cam-effects-toggle {
+  font-size: 18px !important;
+  color: #ffcc00;
+  transition: background 0.2s, color 0.2s, box-shadow 0.2s;
+}
+.cam-effects-toggle.cam-effects-off {
+  background: rgba(255, 255, 255, 0.15);
+  color: rgba(255, 255, 255, 0.35);
+  box-shadow: none;
+}
+
 /* FX (warp) button — text label */
 .cam-fx-btn {
   font-size: 13px !important;
