@@ -992,6 +992,13 @@ html, body {
   box-shadow: 0 0 10px rgba(46, 204, 64, 0.5);
 }
 
+/* FX (warp) button — text label */
+.cam-fx-btn {
+  font-size: 13px !important;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+}
+
 /* Lens buttons — smaller, with text */
 .cam-lens-container {
   display: flex;
@@ -1051,51 +1058,45 @@ html, body {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 6px;
+  gap: 0;
   background: rgba(0, 0, 0, 0.45);
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
   border-radius: 22px;
-  padding: 10px 6px;
+  padding: 8px 8px;
+  width: 40px;
+  overflow: hidden;
 }
 .cam-blend-slider {
-  -webkit-appearance: slider-vertical;
-  appearance: slider-vertical;
-  writing-mode: vertical-lr;
-  direction: rtl;
-  width: 28px;
-  height: 100px;
-  background: transparent;
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100px;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.25);
   outline: none;
+  transform: rotate(-90deg);
+  transform-origin: center center;
+  margin: 48px 0;
 }
 .cam-blend-slider::-webkit-slider-thumb {
   -webkit-appearance: none;
   appearance: none;
-  width: 22px;
-  height: 22px;
+  width: 24px;
+  height: 24px;
   border-radius: 50%;
   background: #fff;
   border: none;
   cursor: pointer;
   box-shadow: 0 1px 6px rgba(0, 0, 0, 0.5);
 }
-.cam-blend-slider::-webkit-slider-runnable-track {
-  width: 4px;
-  background: rgba(255, 255, 255, 0.25);
-  border-radius: 2px;
-}
 .cam-blend-slider::-moz-range-thumb {
-  width: 22px;
-  height: 22px;
+  width: 24px;
+  height: 24px;
   border-radius: 50%;
   background: #fff;
   border: none;
   cursor: pointer;
-}
-.cam-blend-slider::-moz-range-track {
-  width: 4px;
-  background: rgba(255, 255, 255, 0.25);
-  border-radius: 2px;
 }
 .cam-blend-icon {
   font-size: 16px;

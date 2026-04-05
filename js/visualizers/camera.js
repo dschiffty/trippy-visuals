@@ -73,7 +73,7 @@ export class CameraFeed {
       const devices = await navigator.mediaDevices.enumerateDevices();
       const videoInputs = devices.filter(d => d.kind === 'videoinput');
 
-      // On iOS, rear cameras typically have labels like:
+      // On iOS, rear cameras have labels like:
       // "Back Camera", "Back Ultra Wide Camera", "Back Telephoto Camera"
       const rearCams = videoInputs.filter(d => {
         const label = (d.label || '').toLowerCase();
@@ -81,19 +81,51 @@ export class CameraFeed {
       });
 
       if (rearCams.length > 1) {
-        this._availableLenses = rearCams.map(d => {
-          const label = d.label || '';
-          let shortLabel = '1x';
-          const lower = label.toLowerCase();
-          if (lower.includes('ultra wide') || lower.includes('ultrawide')) shortLabel = '0.5x';
-          else if (lower.includes('telephoto')) {
-            if (lower.includes('2x') || lower.includes('×2')) shortLabel = '2x';
-            else if (lower.includes('5x') || lower.includes('×5')) shortLabel = '5x';
-            else if (lower.includes('3x') || lower.includes('×3')) shortLabel = '3x';
-            else shortLabel = '2x'; // default telephoto
-          }
-          return { deviceId: d.deviceId, label: d.label, shortLabel };
+        // Deduplicate by deviceId
+        const seen = new Set();
+        const unique = rearCams.filter(d => {
+          if (seen.has(d.deviceId)) return false;
+          seen.add(d.deviceId);
+          return true;
         });
+
+        // Classify each lens by label keywords
+        const lenses = [];
+        let hasUltraWide = false, hasMain = false, hasTelephoto = false;
+
+        for (const d of unique) {
+          const lower = (d.label || '').toLowerCase();
+          let shortLabel = '1x';
+          let sortOrder = 1;
+
+          if (lower.includes('ultra wide') || lower.includes('ultrawide')) {
+            shortLabel = '0.5x';
+            sortOrder = 0;
+            if (hasUltraWide) continue; // skip duplicate type
+            hasUltraWide = true;
+          } else if (lower.includes('telephoto')) {
+            // iPhone 15 Pro/16 Pro have 5x telephoto, older models have 2x/3x
+            // Check label for explicit multiplier, default to 5x for modern devices
+            if (lower.includes('2x') || lower.includes('×2')) shortLabel = '2x';
+            else if (lower.includes('3x') || lower.includes('×3')) shortLabel = '3x';
+            else shortLabel = '5x'; // modern iPhones default
+            sortOrder = 2;
+            if (hasTelephoto) continue;
+            hasTelephoto = true;
+          } else {
+            // Main camera
+            shortLabel = '1x';
+            sortOrder = 1;
+            if (hasMain) continue;
+            hasMain = true;
+          }
+
+          lenses.push({ deviceId: d.deviceId, label: d.label, shortLabel, sortOrder });
+        }
+
+        // Sort: ultrawide, main, telephoto
+        lenses.sort((a, b) => a.sortOrder - b.sortOrder);
+        this._availableLenses = lenses;
       }
     } catch { /* silent */ }
   }
@@ -284,7 +316,8 @@ export class CameraVisualizer {
     leftStack.appendChild(this._lensContainer);
 
     // Warp picker
-    const warpBtn = this._makeFloatBtn('◎', 'Warp');
+    const warpBtn = this._makeFloatBtn('FX', 'Effects');
+    warpBtn.classList.add('cam-fx-btn');
     this._warpBtn = warpBtn;
     this._warpMenuOpen = false;
     warpBtn.addEventListener('click', () => {
