@@ -1,11 +1,12 @@
 /* ============================================
    Liquid Lite — Mobile Preview Mode
    Wraps LiquidShowVisualizer with a simplified
-   mobile-friendly control bar.
+   mobile-friendly UI matching Camera mode layout.
    ============================================ */
 
 import { LiquidShowVisualizer } from './liquid-show.js';
 import { LL_PRESETS } from './ll-presets.js';
+import { createVerticalSlider } from '../ui/vertical-slider.js';
 
 export class LiquidLiteVisualizer {
   static get label() { return 'Liquid Lite'; }
@@ -24,13 +25,36 @@ export class LiquidLiteVisualizer {
     this._app = null;
     this._micBtn = null;
     this._micLevelRAF = null;
+    this._globalIntensity = 1.0;
+    this._floatingEls = [];
+    this._leftStack = null;
+    this._rightStack = null;
+    this._bottomBar = null;
+    this._orientationHandler = null;
+    this._orientationDebounce = null;
+    this._gainSlider = null;
   }
 
-  draw(freq, time) { this.engine.draw(freq, time); }
+  draw(freq, time) {
+    // Apply global intensity multiplier to all layer turbulence values
+    if (this._globalIntensity !== 1.0) {
+      const saved = this.engine.layers.map(l => l.params.turbulence);
+      this.engine.layers.forEach(l => {
+        l.params.turbulence = Math.min(1, l.params.turbulence * this._globalIntensity);
+      });
+      this.engine.draw(freq, time);
+      this.engine.layers.forEach((l, i) => l.params.turbulence = saved[i]);
+    } else {
+      this.engine.draw(freq, time);
+    }
+  }
+
   reset() { this.engine.reset(); }
   getState() { return this.engine.getState(); }
   setState(s) { this.engine.setState(s); }
   setParam(k, v) { this.engine.setParam?.(k, v); }
+
+  // --- Panel UI (Camera mode inspired) ---
 
   buildPanel(controlPanelEl, app) {
     this.destroyPanel();
@@ -38,95 +62,204 @@ export class LiquidLiteVisualizer {
     controlPanelEl.classList.add('ll-active');
     this._controlPanelEl = controlPanelEl;
 
+    // Fullscreen overlay container (same pattern as Camera mode)
     const panel = document.createElement('div');
-    panel.className = 'll-lite-panel';
+    panel.className = 'cam-ui';
+    this.panelEl = panel;
+    document.body.appendChild(panel);
 
-    // Preset selector
+    // --- Left floating stack ---
+    const leftStack = document.createElement('div');
+    leftStack.className = 'cam-float cam-float-left';
+
+    // Mic toggle
+    const micBtn = this._makeFloatBtn('🎤', 'Mic');
+    this._micBtn = micBtn;
+    if (app?.mic.active) {
+      this._updateMicUI(true);
+      this._startLevelMonitor();
+    }
+    micBtn.addEventListener('click', () => this._toggleMic());
+    leftStack.appendChild(micBtn);
+
+    this._leftStack = leftStack;
+    panel.appendChild(leftStack);
+
+    // --- Right floating stack ---
+    const rightStack = document.createElement('div');
+    rightStack.className = 'cam-float cam-float-right';
+
+    // Mic gain slider (only visible when mic is active)
+    const gainSliderComp = createVerticalSlider({
+      icon: '🎤',
+      min: 0.5,
+      max: 10,
+      step: 0.5,
+      value: app?.mic.gainValue ?? 3.0,
+      className: 'cam-gain-slider-wrap',
+      onChange: (val) => {
+        if (this._app) this._app.setMicGain(val);
+      },
+    });
+    this._gainSlider = gainSliderComp;
+    gainSliderComp.setVisible(!!app?.mic.active);
+    rightStack.appendChild(gainSliderComp.wrap);
+
+    // Intensity slider (global turbulence)
+    const intensitySliderComp = createVerticalSlider({
+      icon: '✦',
+      min: 0,
+      max: 2,
+      step: 0.05,
+      value: this._globalIntensity,
+      onChange: (val) => {
+        this._globalIntensity = val;
+      },
+    });
+    this._intensitySlider = intensitySliderComp;
+    rightStack.appendChild(intensitySliderComp.wrap);
+
+    this._rightStack = rightStack;
+    panel.appendChild(rightStack);
+
+    // --- Bottom bar ---
+    const bottomBar = document.createElement('div');
+    bottomBar.className = 'cam-bottom-bar';
+
+    // Preset dropdown
     const presetSelector = LiquidShowVisualizer.buildPresetSelector(state => {
       this.engine.setState(state);
     });
     this._presetSelect = presetSelector.querySelector('select');
     if (this._presetSelect && this._currentPresetId) this._presetSelect.value = this._currentPresetId;
-    panel.appendChild(presetSelector);
+    presetSelector.className = 'cam-preset-wrap';
+    bottomBar.appendChild(presetSelector);
 
-    // Mic toggle button with long-press gain control
-    const micBtn = document.createElement('button');
-    micBtn.className = 'll-lite-mic';
-    micBtn.innerHTML = '<span class="mic-icon">🎤</span>';
-    this._micBtn = micBtn;
-
-    // Restore mic UI state if mic is already active from a previous mode
-    if (app?.mic.active) {
-      this._updateMicUI(true);
-      this._startLevelMonitor();
-    }
-
-    // Short tap = toggle mic, long press = open gain popover
-    let longPressTimer = null;
-    let didLongPress = false;
-    const startPress = () => {
-      didLongPress = false;
-      longPressTimer = setTimeout(() => {
-        didLongPress = true;
-        this._showGainPopover(micBtn);
-      }, 500);
-    };
-    const endPress = () => {
-      clearTimeout(longPressTimer);
-      if (!didLongPress) this._toggleMic();
-    };
-    const cancelPress = () => { clearTimeout(longPressTimer); };
-    micBtn.addEventListener('touchstart', startPress, { passive: true });
-    micBtn.addEventListener('touchend', (e) => { e.preventDefault(); endPress(); });
-    micBtn.addEventListener('touchcancel', cancelPress);
-    micBtn.addEventListener('mousedown', startPress);
-    micBtn.addEventListener('mouseup', endPress);
-    micBtn.addEventListener('mouseleave', cancelPress);
-    panel.appendChild(micBtn);
-
-    // Randomize button
-    const randomBtn = document.createElement('button');
-    randomBtn.className = 'll-lite-randomize';
-    randomBtn.textContent = '\uD83C\uDFB2 Randomize';
+    // Randomize button (dice icon, matching cam-fbtn style)
+    const randomBtn = this._makeFloatBtn('🎲', 'Randomize');
     randomBtn.addEventListener('click', () => {
       this.engine._randomizeAllLayersInternal();
       if (this._presetSelect) this._presetSelect.value = '';
     });
-    panel.appendChild(randomBtn);
+    bottomBar.appendChild(randomBtn);
 
-    controlPanelEl.appendChild(panel);
-    this.panelEl = panel;
+    this._bottomBar = bottomBar;
+    panel.appendChild(bottomBar);
 
-    // Listen for mic state changes from app (e.g. if mic stops externally)
+    // Track all floating elements for hide/show
+    this._floatingEls = [leftStack, rightStack, bottomBar];
+
+    // Mic state callback
     this._micStateHandler = (state, err) => {
       if (state === 'error') {
-        this._showMicError(err);
+        this._showError(err?.name === 'NotAllowedError' ? 'Mic access denied' : 'Mic unavailable');
         this._updateMicUI(false);
         this._stopLevelMonitor();
+        this._gainSlider?.setVisible(false);
       } else {
         this._updateMicUI(state);
+        this._gainSlider?.setVisible(!!state);
         if (state) this._startLevelMonitor();
         else this._stopLevelMonitor();
       }
     };
     if (app) app.mic.onStateChange = this._micStateHandler;
 
-    // UI toggle is handled by the app-level mobile tap handler
+    // --- Orientation change handler ---
+    this._applyOrientationLayout();
+    this._orientationDebounce = null;
+    this._orientationHandler = () => {
+      clearTimeout(this._orientationDebounce);
+      this._orientationDebounce = setTimeout(() => this._applyOrientationLayout(), 200);
+    };
+    window.addEventListener('resize', this._orientationHandler);
+    window.addEventListener('orientationchange', this._orientationHandler);
+  }
+
+  _makeFloatBtn(icon, title) {
+    const btn = document.createElement('button');
+    btn.className = 'cam-fbtn';
+    btn.innerHTML = icon;
+    btn.title = title;
+    return btn;
+  }
+
+  // --- Orientation layout (same pattern as Camera mode) ---
+
+  _applyOrientationLayout() {
+    if (!this.panelEl) return;
+
+    const isLandscape = window.innerWidth > window.innerHeight;
+    this.panelEl.classList.toggle('cam-landscape', isLandscape);
+
+    const insets = this._getSafeAreaInsets();
+
+    if (this._leftStack) {
+      this._leftStack.style.left = `${Math.max(insets.left, 12) + 8}px`;
+    }
+    if (this._rightStack) {
+      this._rightStack.style.right = `${Math.max(insets.right, 12) + 8}px`;
+    }
+    if (this._bottomBar) {
+      this._bottomBar.style.paddingLeft = `${Math.max(insets.left, 12) + 16}px`;
+      this._bottomBar.style.paddingRight = `${Math.max(insets.right, 12) + 16}px`;
+      this._bottomBar.style.paddingBottom = `${Math.max(insets.bottom, 8) + 8}px`;
+    }
+
+    if (isLandscape && this._leftStack && this._rightStack) {
+      this._leftStack.style.top = '45%';
+      this._rightStack.style.top = '45%';
+    } else if (this._leftStack && this._rightStack) {
+      this._leftStack.style.top = '50%';
+      this._rightStack.style.top = '50%';
+    }
+  }
+
+  _getSafeAreaInsets() {
+    const probe = document.createElement('div');
+    probe.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;padding-top:env(safe-area-inset-top,0px);padding-right:env(safe-area-inset-right,0px);padding-bottom:env(safe-area-inset-bottom,0px);padding-left:env(safe-area-inset-left,0px);pointer-events:none;visibility:hidden;z-index:-1;';
+    document.body.appendChild(probe);
+    const cs = getComputedStyle(probe);
+    const insets = {
+      top: parseFloat(cs.paddingTop) || 0,
+      right: parseFloat(cs.paddingRight) || 0,
+      bottom: parseFloat(cs.paddingBottom) || 0,
+      left: parseFloat(cs.paddingLeft) || 0,
+    };
+    probe.remove();
+    return insets;
+  }
+
+  // --- UI visibility (tap to hide/show) ---
+
+  setUIHidden(hidden) {
+    this._floatingEls.forEach(el => {
+      el.classList.toggle('cam-hidden', hidden);
+    });
   }
 
   destroyPanel() {
-    this._dismissGainPopover();
     this._stopLevelMonitor();
     // Do NOT stop the mic — it persists across mode switches
     if (this._app) this._app.mic.onStateChange = null;
+    if (this._orientationHandler) {
+      window.removeEventListener('resize', this._orientationHandler);
+      window.removeEventListener('orientationchange', this._orientationHandler);
+      this._orientationHandler = null;
+    }
     if (this.panelEl) { this.panelEl.remove(); this.panelEl = null; }
+    this._floatingEls = [];
+    this._leftStack = null;
+    this._rightStack = null;
+    this._bottomBar = null;
     this._micBtn = null;
     this._presetSelect = null;
+    this._gainSlider = null;
+    this._intensitySlider = null;
     this._controlPanelEl?.classList.remove('ll-active', 'll-ui-hidden');
-
   }
 
-  // --- Mic (delegates to app) ---
+  // --- Mic ---
 
   async _toggleMic() {
     if (!this._app) return;
@@ -135,8 +268,12 @@ export class LiquidLiteVisualizer {
 
   _updateMicUI(active) {
     if (!this._micBtn) return;
-    this._micBtn.classList.toggle('mic-active', active);
+    this._micBtn.classList.toggle('mic-active', !!active);
     if (!active) this._micBtn.style.removeProperty('--mic-level');
+    // Update gain slider value when mic reconnects
+    if (active && this._gainSlider && this._app) {
+      this._gainSlider.slider.value = this._app.mic.gainValue;
+    }
   }
 
   _startLevelMonitor() {
@@ -158,67 +295,12 @@ export class LiquidLiteVisualizer {
     if (this._micLevelRAF) { cancelAnimationFrame(this._micLevelRAF); this._micLevelRAF = null; }
   }
 
-  _showMicError(err) {
-    const msg = document.createElement('div');
-    msg.className = 'll-mic-error';
-    if (err?.name === 'NotAllowedError') {
-      msg.textContent = 'Mic access denied — enable in browser settings for audio reactivity';
-    } else if (err?.name === 'NotFoundError') {
-      msg.textContent = 'No microphone found';
-    } else {
-      msg.textContent = 'Mic unavailable — HTTPS required';
-    }
-    this.panelEl?.appendChild(msg);
-    setTimeout(() => msg.remove(), 4000);
-  }
-
-  // --- Gain Popover ---
-
-  _showGainPopover(anchorEl) {
-    this._dismissGainPopover();
-    if (!this._app) return;
-
-    const popover = document.createElement('div');
-    popover.className = 'll-gain-popover';
-
-    const label = document.createElement('div');
-    label.className = 'll-gain-label';
-    label.textContent = `Mic Gain: ${this._app.mic.gainValue.toFixed(1)}x`;
-    popover.appendChild(label);
-
-    const slider = document.createElement('input');
-    slider.type = 'range';
-    slider.className = 'll-gain-slider';
-    slider.min = '0.5';
-    slider.max = '10';
-    slider.step = '0.5';
-    slider.value = this._app.mic.gainValue;
-    slider.addEventListener('input', () => {
-      this._app.setMicGain(parseFloat(slider.value));
-      label.textContent = `Mic Gain: ${this._app.mic.gainValue.toFixed(1)}x`;
-    });
-    popover.appendChild(slider);
-
-    this.panelEl.appendChild(popover);
-    this._gainPopover = popover;
-
-    setTimeout(() => {
-      this._dismissGainHandler = (e) => {
-        if (!popover.contains(e.target) && e.target !== anchorEl && !anchorEl.contains(e.target)) {
-          this._dismissGainPopover();
-        }
-      };
-      document.addEventListener('click', this._dismissGainHandler, true);
-      document.addEventListener('touchstart', this._dismissGainHandler, true);
-    }, 10);
-  }
-
-  _dismissGainPopover() {
-    if (this._gainPopover) { this._gainPopover.remove(); this._gainPopover = null; }
-    if (this._dismissGainHandler) {
-      document.removeEventListener('click', this._dismissGainHandler, true);
-      document.removeEventListener('touchstart', this._dismissGainHandler, true);
-      this._dismissGainHandler = null;
-    }
+  _showError(msg) {
+    if (!this.panelEl) return;
+    const el = document.createElement('div');
+    el.className = 'cam-error';
+    el.textContent = msg;
+    this.panelEl.appendChild(el);
+    setTimeout(() => el.remove(), 3500);
   }
 }
