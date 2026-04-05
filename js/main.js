@@ -500,33 +500,46 @@ class App {
   /* ---- Screen Wake Lock ---- */
 
   _setupWakeLock() {
-    if (!('wakeLock' in navigator)) return;
+    if (!('wakeLock' in navigator)) {
+      console.warn('[WakeLock] API not supported in this browser');
+      return;
+    }
     this._wakeLock = null;
 
     this._acquireWakeLock = async () => {
-      if (this._wakeLock) return;
       try {
+        if (this._wakeLock) {
+          console.log('[WakeLock] Already held, skipping');
+          return;
+        }
         this._wakeLock = await navigator.wakeLock.request('screen');
-        this._wakeLock.addEventListener('release', () => { this._wakeLock = null; });
-      } catch { /* fail silently */ }
+        console.log('[WakeLock] Acquired successfully');
+        this._wakeLock.addEventListener('release', () => {
+          console.log('[WakeLock] Released');
+          this._wakeLock = null;
+        });
+      } catch (err) {
+        console.warn('[WakeLock] Failed to acquire:', err.name, err.message);
+      }
     };
 
-    // Attempt immediately (works if page already has user gesture)
+    // Attempt immediately
     this._acquireWakeLock();
 
-    // Re-acquire when returning to the tab
+    // Re-acquire every time page becomes visible (Safari releases on
+    // screen dim, tab switch, and app backgrounding)
     document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'visible') this._acquireWakeLock();
+      if (document.visibilityState === 'visible') {
+        console.log('[WakeLock] Page visible — re-acquiring');
+        this._acquireWakeLock();
+      }
     });
 
-    // Acquire on first user interaction (needed on iOS/mobile where
-    // wake lock requires a user gesture)
-    const gestureEvents = ['touchstart', 'click'];
-    const onGesture = () => {
+    // Re-acquire on every touch as fallback (Safari may release
+    // the lock at any time; each touch is a fresh user gesture)
+    document.addEventListener('touchstart', () => {
       this._acquireWakeLock();
-      gestureEvents.forEach(e => document.removeEventListener(e, onGesture, true));
-    };
-    gestureEvents.forEach(e => document.addEventListener(e, onGesture, { capture: true, once: false }));
+    }, { passive: true });
   }
 
   /* ---- Mobile UI Toggle ---- */
