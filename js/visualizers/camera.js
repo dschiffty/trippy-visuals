@@ -6,6 +6,7 @@
 
 import { LiquidShowVisualizer } from './liquid-show.js';
 import { LL_PRESETS } from './ll-presets.js';
+import { CameraWarpGPU, WARP_MODES, WARP_LABELS } from './camera-warp-gpu.js';
 
 /**
  * Reusable camera feed manager.
@@ -59,37 +60,43 @@ export class CameraFeed {
   }
 
   /**
+   * Get cover-fit crop parameters for the video → canvas mapping.
+   */
+  getCoverFitParams(canvasWidth, canvasHeight) {
+    const vw = this._video.videoWidth;
+    const vh = this._video.videoHeight;
+    if (!vw || !vh) return null;
+
+    const canvasRatio = canvasWidth / canvasHeight;
+    const videoRatio = vw / vh;
+    let sx = 0, sy = 0, sw = vw, sh = vh;
+    if (videoRatio > canvasRatio) {
+      sw = vh * canvasRatio;
+      sx = (vw - sw) / 2;
+    } else {
+      sh = vw / canvasRatio;
+      sy = (vh - sh) / 2;
+    }
+    return { sx, sy, sw, sh };
+  }
+
+  /**
    * Draw the camera feed to a canvas context, filling the canvas.
    * Uses cover-fit logic so there are no black bars.
    */
   drawToCanvas(ctx, canvasWidth, canvasHeight) {
     if (!this._active || this._video.readyState < 2) return;
-    const vw = this._video.videoWidth;
-    const vh = this._video.videoHeight;
-    if (!vw || !vh) return;
-
-    // Cover-fit: scale to fill, crop overflow
-    const canvasRatio = canvasWidth / canvasHeight;
-    const videoRatio = vw / vh;
-    let sx = 0, sy = 0, sw = vw, sh = vh;
-    if (videoRatio > canvasRatio) {
-      // Video is wider — crop sides
-      sw = vh * canvasRatio;
-      sx = (vw - sw) / 2;
-    } else {
-      // Video is taller — crop top/bottom
-      sh = vw / canvasRatio;
-      sy = (vh - sh) / 2;
-    }
+    const fit = this.getCoverFitParams(canvasWidth, canvasHeight);
+    if (!fit) return;
 
     // Mirror front camera
     if (this._facingMode === 'user') {
       ctx.save();
       ctx.scale(-1, 1);
-      ctx.drawImage(this._video, sx, sy, sw, sh, -canvasWidth, 0, canvasWidth, canvasHeight);
+      ctx.drawImage(this._video, fit.sx, fit.sy, fit.sw, fit.sh, -canvasWidth, 0, canvasWidth, canvasHeight);
       ctx.restore();
     } else {
-      ctx.drawImage(this._video, sx, sy, sw, sh, 0, 0, canvasWidth, canvasHeight);
+      ctx.drawImage(this._video, fit.sx, fit.sy, fit.sw, fit.sh, 0, 0, canvasWidth, canvasHeight);
     }
   }
 }
@@ -107,6 +114,7 @@ export class CameraVisualizer {
     this.canvas = canvas;
     this.engine = new LiquidShowVisualizer(canvas);
     this.camera = new CameraFeed();
+    this.warpGPU = new CameraWarpGPU();
     this._app = null;
     this._micBtn = null;
     this._micLevelRAF = null;
@@ -117,6 +125,11 @@ export class CameraVisualizer {
     this._recordDot = null;
     this._presetSelect = null;
     this._cameraStarted = false;
+    this._cameraFailed = false;
+
+    // Camera controls
+    this._cameraBlend = 0.7;    // 0 = camera hidden, 1 = full strength
+    this._warpMode = 'none';
 
     // Load a random preset
     const preset = LL_PRESETS[Math.floor(Math.random() * LL_PRESETS.length)];
@@ -131,24 +144,86 @@ export class CameraVisualizer {
     const w = this.canvas.width;
     const h = this.canvas.height;
 
-    // 1. Draw camera feed as background
-    this.camera.drawToCanvas(ctx, w, h);
+    // 1. Clear canvas
+    ctx.clearRect(0, 0, w, h);
 
-    // 2. Draw effects on top with compositing
-    // Save the camera frame, render effects to engine's internal canvases,
-    // then composite over the camera feed
+    // 2. Draw camera feed as background (warped if applicable)
+    if (this.camera.active && this._cameraBlend > 0.01) {
+      ctx.globalAlpha = this._cameraBlend;
+
+      const needsWarp = this._warpMode !== 'none';
+      const isFront = this.camera.facingMode === 'user';
+      const video = this.camera.video;
+
+      if (video.readyState >= 2 && (needsWarp || isFront)) {
+        // Use GPU warp pipeline: crop video to cover-fit canvas first via
+        // an intermediate canvas, then warp via WebGL
+        const warpResult = this.warpGPU.process(video, w, h, this._warpMode, isFront);
+        if (warpResult) {
+          // The warp output is already at canvas dimensions but processes the full
+          // video frame. We need to handle cover-fit cropping.
+          // For warped output, we draw from the warp canvas with cover-fit applied
+          // The GPU processes the full video, so crop params need to map to UV space.
+          // Simpler approach: draw cropped video to a temp canvas, then warp that.
+          this._drawWarpedCamera(ctx, w, h);
+        } else {
+          // Warp failed, fallback to direct draw
+          this.camera.drawToCanvas(ctx, w, h);
+        }
+      } else {
+        // No warp needed, direct draw
+        this.camera.drawToCanvas(ctx, w, h);
+      }
+
+      ctx.globalAlpha = 1;
+    }
+
+    // 3. Draw effects on top
     if (this.camera.active) {
-      // Store current composite operation
       const prevOp = ctx.globalCompositeOperation;
-      // Use 'source-over' so effects blend naturally on top of camera
       ctx.globalCompositeOperation = 'source-over';
-      // Set a flag so the engine knows to use transparent background
       this.engine._cameraMode = true;
       this.engine.draw(freq, time);
       ctx.globalCompositeOperation = prevOp;
     } else {
       this.engine._cameraMode = false;
       this.engine.draw(freq, time);
+    }
+  }
+
+  /**
+   * Draw camera through GPU warp pipeline with cover-fit cropping.
+   * Uses an intermediate canvas to crop video to cover-fit dimensions,
+   * then passes that to the GPU warp.
+   */
+  _drawWarpedCamera(ctx, w, h) {
+    const video = this.camera.video;
+    if (video.readyState < 2) return;
+
+    // Get cover-fit crop params
+    const fit = this.camera.getCoverFitParams(w, h);
+    if (!fit) return;
+
+    // Use/create intermediate canvas for cropping
+    if (!this._cropCanvas) {
+      this._cropCanvas = document.createElement('canvas');
+    }
+    if (this._cropCanvas.width !== w || this._cropCanvas.height !== h) {
+      this._cropCanvas.width = w;
+      this._cropCanvas.height = h;
+    }
+    const cropCtx = this._cropCanvas.getContext('2d');
+    cropCtx.clearRect(0, 0, w, h);
+    cropCtx.drawImage(video, fit.sx, fit.sy, fit.sw, fit.sh, 0, 0, w, h);
+
+    // Process cropped frame through GPU warp
+    const isFront = this.camera.facingMode === 'user';
+    const warpResult = this.warpGPU.process(this._cropCanvas, w, h, this._warpMode, isFront);
+    if (warpResult) {
+      ctx.drawImage(warpResult, 0, 0, w, h);
+    } else {
+      // Fallback
+      this.camera.drawToCanvas(ctx, w, h);
     }
   }
 
@@ -170,6 +245,54 @@ export class CameraVisualizer {
 
     const panel = document.createElement('div');
     panel.className = 'll-lite-panel camera-panel';
+
+    // --- Camera controls row (blend slider + warp picker) ---
+    const controlsRow = document.createElement('div');
+    controlsRow.className = 'camera-controls-row';
+
+    // Camera blend slider
+    const blendGroup = document.createElement('div');
+    blendGroup.className = 'camera-slider-group';
+    const blendLabel = document.createElement('span');
+    blendLabel.className = 'camera-slider-label';
+    blendLabel.textContent = 'Camera';
+    const blendSlider = document.createElement('input');
+    blendSlider.type = 'range';
+    blendSlider.className = 'camera-slider-input';
+    blendSlider.min = '0';
+    blendSlider.max = '1';
+    blendSlider.step = '0.05';
+    blendSlider.value = this._cameraBlend;
+    blendSlider.addEventListener('input', () => {
+      this._cameraBlend = parseFloat(blendSlider.value);
+    });
+    blendGroup.appendChild(blendLabel);
+    blendGroup.appendChild(blendSlider);
+    controlsRow.appendChild(blendGroup);
+
+    // Warp mode picker
+    const warpGroup = document.createElement('div');
+    warpGroup.className = 'camera-warp-group';
+    const warpLabel = document.createElement('span');
+    warpLabel.className = 'camera-slider-label';
+    warpLabel.textContent = 'Warp';
+    const warpSelect = document.createElement('select');
+    warpSelect.className = 'camera-warp-select';
+    WARP_MODES.forEach(mode => {
+      const opt = document.createElement('option');
+      opt.value = mode;
+      opt.textContent = WARP_LABELS[mode];
+      if (mode === this._warpMode) opt.selected = true;
+      warpSelect.appendChild(opt);
+    });
+    warpSelect.addEventListener('change', () => {
+      this._warpMode = warpSelect.value;
+    });
+    warpGroup.appendChild(warpLabel);
+    warpGroup.appendChild(warpSelect);
+    controlsRow.appendChild(warpGroup);
+
+    panel.appendChild(controlsRow);
 
     // --- Main button row ---
     const buttonRow = document.createElement('div');
@@ -266,6 +389,7 @@ export class CameraVisualizer {
     this._recordDot = null;
     this._presetSelect = null;
     this._controlPanelEl?.classList.remove('ll-active', 'll-ui-hidden');
+    // Don't destroy warpGPU — reuse across panel rebuilds
   }
 
   // --- Camera ---
