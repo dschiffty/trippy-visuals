@@ -519,7 +519,13 @@ class App {
       }
     };
 
+    let hasUserGesture = false;
+
     this._acquireWakeLock = async () => {
+      if (!hasUserGesture) {
+        console.log('[WakeLock] No user gesture yet, skipping');
+        return;
+      }
       try {
         if (this._wakeLock) {
           console.log('[WakeLock] Already held, skipping');
@@ -545,23 +551,30 @@ class App {
       }
     };
 
-    // Attempt immediately
-    this._acquireWakeLock();
+    // Do NOT attempt on load — wait for first user gesture
+    this._wakeLockStatus = 'Waiting for gesture';
+    updateHUD();
 
-    // Re-acquire every time page becomes visible (Safari releases on
-    // screen dim, tab switch, and app backgrounding)
+    // Re-acquire every time page becomes visible, but only after
+    // a user gesture has occurred
     document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'visible') {
+      if (document.visibilityState === 'visible' && hasUserGesture) {
         console.log('[WakeLock] Page visible — re-acquiring');
         this._acquireWakeLock();
       }
     });
 
-    // Re-acquire on every touch as fallback (Safari may release
-    // the lock at any time; each touch is a fresh user gesture)
+    // Acquire on every touch (each is a fresh user gesture)
     document.addEventListener('touchstart', () => {
+      hasUserGesture = true;
       this._acquireWakeLock();
     }, { passive: true });
+
+    // Also handle click for non-touch interactions
+    document.addEventListener('click', () => {
+      hasUserGesture = true;
+      this._acquireWakeLock();
+    });
   }
 
   /* ---- Mobile UI Toggle ---- */
