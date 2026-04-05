@@ -1142,6 +1142,13 @@ html, body {
   pointer-events: none !important;
 }
 
+/* Capture buttons group (shutter + record) */
+.cam-capture-group {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
 /* Preset dropdown in camera mode */
 .cam-preset-wrap {
   display: flex;

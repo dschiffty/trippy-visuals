@@ -427,12 +427,16 @@ export class CameraVisualizer {
     presetSelector.className = 'cam-preset-wrap';
     bottomBar.appendChild(presetSelector);
 
+    // Capture buttons group (shutter + record, right side, thumb-reachable)
+    const captureGroup = document.createElement('div');
+    captureGroup.className = 'cam-capture-group';
+
     // Shutter button (snapshot)
     const shutterBtn = document.createElement('button');
     shutterBtn.className = 'cam-shutter';
     shutterBtn.innerHTML = '<span class="cam-shutter-ring"></span>';
     shutterBtn.addEventListener('click', () => this._takeSnapshot());
-    bottomBar.appendChild(shutterBtn);
+    captureGroup.appendChild(shutterBtn);
 
     // Record button
     const recordBtn = document.createElement('button');
@@ -440,7 +444,9 @@ export class CameraVisualizer {
     recordBtn.innerHTML = '<span class="cam-record-dot"></span>';
     this._recordBtn = recordBtn;
     recordBtn.addEventListener('click', () => this._toggleRecording());
-    bottomBar.appendChild(recordBtn);
+    captureGroup.appendChild(recordBtn);
+
+    bottomBar.appendChild(captureGroup);
 
     this._bottomBar = bottomBar;
     panel.appendChild(bottomBar);
