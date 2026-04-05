@@ -234,8 +234,14 @@ export class CameraVisualizer {
     ctx.clearRect(0, 0, w, h);
 
     const blend = this._effectsHidden ? 1 : this._cameraBlend;
-    if (this.camera.active && blend > 0.01) {
-      ctx.globalAlpha = blend;
+    // Map slider blend (0–1) to camera opacity and effect opacity:
+    // At blend=0: camera hidden, effects full
+    // At blend=1: camera full, effects very subtle (0.15)
+    const cameraAlpha = blend;
+    const effectAlpha = 1.0 - blend * 0.85;
+
+    if (this.camera.active && cameraAlpha > 0.01) {
+      ctx.globalAlpha = cameraAlpha;
       const needsWarp = this._warpMode !== 'none';
       const isFront = this.camera.facingMode === 'user';
       const video = this.camera.video;
@@ -253,8 +259,10 @@ export class CameraVisualizer {
       if (this.camera.active) {
         const prevOp = ctx.globalCompositeOperation;
         ctx.globalCompositeOperation = 'source-over';
+        ctx.globalAlpha = effectAlpha;
         this.engine._cameraMode = true;
         this.engine.draw(freq, time);
+        ctx.globalAlpha = 1;
         ctx.globalCompositeOperation = prevOp;
       } else {
         this.engine._cameraMode = false;
