@@ -232,7 +232,7 @@ export class CameraVisualizer {
     const blend = this._effectsHidden ? 1 : this._cameraBlend;
     if (this.camera.active && blend > 0.01) {
       ctx.globalAlpha = blend;
-      const needsWarp = this._warpMode !== 'none' && !this._effectsHidden;
+      const needsWarp = this._warpMode !== 'none';
       const isFront = this.camera.facingMode === 'user';
       const video = this.camera.video;
 
