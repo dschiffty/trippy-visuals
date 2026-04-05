@@ -502,9 +502,22 @@ class App {
   _setupWakeLock() {
     if (!('wakeLock' in navigator)) {
       console.warn('[WakeLock] API not supported in this browser');
+      this._wakeLockStatus = 'Unsupported';
+      this._wakeLockLastEvent = '--';
       return;
     }
     this._wakeLock = null;
+    this._wakeLockStatus = 'Pending';
+    this._wakeLockLastEvent = '--';
+
+    const timeStr = () => new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    const updateHUD = () => {
+      if (this._debugHUD) {
+        this._debugHUD.wakeLock.textContent = this._wakeLockStatus;
+        this._debugHUD.wakeLock.style.color = this._wakeLockStatus === 'Held' ? '#4caf50' : this._wakeLockStatus === 'Failed' ? '#f44336' : '#ffc107';
+        this._debugHUD.wlEvent.textContent = this._wakeLockLastEvent;
+      }
+    };
 
     this._acquireWakeLock = async () => {
       try {
@@ -514,12 +527,21 @@ class App {
         }
         this._wakeLock = await navigator.wakeLock.request('screen');
         console.log('[WakeLock] Acquired successfully');
+        this._wakeLockStatus = 'Held';
+        this._wakeLockLastEvent = `Acquired ${timeStr()}`;
+        updateHUD();
         this._wakeLock.addEventListener('release', () => {
           console.log('[WakeLock] Released');
           this._wakeLock = null;
+          this._wakeLockStatus = 'Released';
+          this._wakeLockLastEvent = `Released ${timeStr()}`;
+          updateHUD();
         });
       } catch (err) {
         console.warn('[WakeLock] Failed to acquire:', err.name, err.message);
+        this._wakeLockStatus = 'Failed';
+        this._wakeLockLastEvent = `Failed ${timeStr()}`;
+        updateHUD();
       }
     };
 
@@ -771,6 +793,9 @@ class App {
       <div class="debug-line"><span class="debug-label">Preset</span> <span id="dbg-preset">--</span></div>
       <div class="debug-line"><span class="debug-label">Audio</span> <span id="dbg-audio">--</span></div>
       <div class="debug-line"><span class="debug-label">Quality</span> <span id="dbg-quality">--</span></div>
+      <div class="debug-line"><span class="debug-label">App Mode</span> <span id="dbg-appmode">--</span></div>
+      <div class="debug-line"><span class="debug-label">Wake Lock</span> <span id="dbg-wakelock">--</span></div>
+      <div class="debug-line"><span class="debug-label">WL Event</span> <span id="dbg-wlevent">--</span></div>
       <div id="dbg-timing" class="debug-timing"></div>
       <div id="dbg-frozen" class="debug-frozen" style="display:none">FROZEN</div>
       <div id="dbg-freeze-tap" class="debug-freeze-tap">⏸</div>
@@ -877,11 +902,27 @@ class App {
       audio: document.getElementById('dbg-audio'),
       quality: document.getElementById('dbg-quality'),
       timingEl: document.getElementById('dbg-timing'),
+      appMode: document.getElementById('dbg-appmode'),
+      wakeLock: document.getElementById('dbg-wakelock'),
+      wlEvent: document.getElementById('dbg-wlevent'),
       frozenLabel: document.getElementById('dbg-frozen'),
       frozen: false,
       fpsHistory: [],
       lastUpdate: 0,
     };
+
+    // Set static app mode value
+    const isStandalone = window.navigator.standalone === true || window.matchMedia('(display-mode: standalone)').matches;
+    this._debugHUD.appMode.textContent = isStandalone ? 'Standalone' : 'Browser';
+
+    // Populate wake lock status if already set before HUD was created
+    if (this._wakeLockStatus) {
+      this._debugHUD.wakeLock.textContent = this._wakeLockStatus;
+      this._debugHUD.wakeLock.style.color = this._wakeLockStatus === 'Held' ? '#4caf50' : this._wakeLockStatus === 'Failed' ? '#f44336' : '#ffc107';
+    }
+    if (this._wakeLockLastEvent) {
+      this._debugHUD.wlEvent.textContent = this._wakeLockLastEvent;
+    }
 
     // Freeze toggle via F key (desktop)
     window.addEventListener('keydown', (e) => {
