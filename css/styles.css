@@ -917,6 +917,52 @@ html, body {
   cursor: pointer;
 }
 
+/* ---- Camera Mode ---- */
+.camera-button-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+}
+.camera-toggle-btn {
+  font-size: 16px !important;
+  padding: 8px 10px !important;
+}
+.camera-snap-btn {
+  font-size: 16px !important;
+  padding: 8px 10px !important;
+}
+.camera-record-btn {
+  padding: 8px 12px !important;
+  position: relative;
+}
+.camera-record-btn .record-dot {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #c0392b;
+  border: 2px solid #fff;
+  transition: all 0.2s;
+}
+.camera-record-btn.recording {
+  background: #c0392b !important;
+  border-color: #e74c3c !important;
+  box-shadow: 0 0 12px rgba(231, 76, 60, 0.7);
+}
+.camera-record-btn.recording .record-dot {
+  border-radius: 3px;
+  width: 12px;
+  height: 12px;
+  background: #fff;
+  animation: record-blink 1s ease-in-out infinite;
+}
+@keyframes record-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
 /* ---- Knobs ---- */
 .knobs-container {
   display: flex;

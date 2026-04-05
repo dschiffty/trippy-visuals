@@ -1373,8 +1373,10 @@ export class LiquidShowVisualizer {
     if (!anyFade) {
       // No fade — clear and composite fresh
       compCtx.clearRect(0, 0, w, h);
-      compCtx.fillStyle = '#000';
-      compCtx.fillRect(0, 0, w, h);
+      if (!this._cameraMode) {
+        compCtx.fillStyle = '#000';
+        compCtx.fillRect(0, 0, w, h);
+      }
     } else {
       // Dim previous frame for trails effect (keep previous content, darken it)
       compCtx.globalCompositeOperation = 'source-over';
@@ -1386,9 +1388,13 @@ export class LiquidShowVisualizer {
           maxFade = Math.max(maxFade, this.layers[i].params.fade || 0);
         }
       }
-      compCtx.globalAlpha = 1 - maxFade * 0.95; // at fade=1, only 5% darkening per frame = long trails
-      compCtx.fillRect(0, 0, w, h);
-      compCtx.globalAlpha = 1;
+      if (!this._cameraMode) {
+        compCtx.globalAlpha = 1 - maxFade * 0.95; // at fade=1, only 5% darkening per frame = long trails
+        compCtx.fillRect(0, 0, w, h);
+        compCtx.globalAlpha = 1;
+      } else {
+        compCtx.clearRect(0, 0, w, h);
+      }
     }
 
     for (let i = 0; i < this.layers.length; i++) {

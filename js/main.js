@@ -7,10 +7,12 @@ import { LiquidMetalVisualizer } from './visualizers/liquid-metal.js';
 import { LiquidShowVisualizer } from './visualizers/liquid-show.js';
 import { ITunesVisualizer } from './visualizers/itunes.js';
 import { LiquidLiteVisualizer } from './visualizers/liquid-lite.js';
+import { CameraVisualizer } from './visualizers/camera.js';
 import { ControlPanel } from './controls.js';
 
 const VIZ_CLASSES = {
   liquidLite: LiquidLiteVisualizer,
+  camera: CameraVisualizer,
   oscilloscope: OscilloscopeVisualizer,
   lissajous: LissajousVisualizer,
   spectrum: SpectrumVisualizer,
