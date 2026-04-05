@@ -1012,6 +1012,13 @@ class App {
     d.quality.textContent = `${qPct}%`;
     d.quality.style.color = qPct === 100 ? '#4caf50' : qPct >= 80 ? '#ffc107' : '#f44336';
 
+    // Wake lock status (refresh every update cycle)
+    if (this._wakeLockStatus) {
+      d.wakeLock.textContent = this._wakeLockStatus;
+      d.wakeLock.style.color = this._wakeLockStatus === 'Held' ? '#4caf50' : this._wakeLockStatus === 'Failed' ? '#f44336' : '#ffc107';
+      d.wlEvent.textContent = this._wakeLockLastEvent || '--';
+    }
+
     // Per-layer and post-processing timing
     const engine = this.activeVisualizer?.engine || this.activeVisualizer;
     const timing = engine?._timing;
