@@ -221,6 +221,37 @@ class App {
       this._setupWakeLock();
     }
 
+    // Log safe area insets on every orientation change (for standalone debugging)
+    const logSafeAreaInsets = () => {
+      const probe = document.createElement('div');
+      probe.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;padding-top:env(safe-area-inset-top,0px);padding-right:env(safe-area-inset-right,0px);padding-bottom:env(safe-area-inset-bottom,0px);padding-left:env(safe-area-inset-left,0px);pointer-events:none;visibility:hidden;z-index:-1;';
+      document.body.appendChild(probe);
+      const cs = getComputedStyle(probe);
+      const insets = {
+        top: parseFloat(cs.paddingTop) || 0,
+        right: parseFloat(cs.paddingRight) || 0,
+        bottom: parseFloat(cs.paddingBottom) || 0,
+        left: parseFloat(cs.paddingLeft) || 0,
+      };
+      probe.remove();
+      const vw = window.innerWidth;
+      const vh = window.innerHeight;
+      const orient = vw > vh ? 'LANDSCAPE' : 'PORTRAIT';
+      const isStandalone = window.navigator.standalone === true || window.matchMedia('(display-mode: standalone)').matches;
+      const displayMode = window.matchMedia('(display-mode: standalone)').matches ? 'standalone' : window.matchMedia('(display-mode: fullscreen)').matches ? 'fullscreen' : 'browser';
+      console.log(`[SafeArea] ${orient} ${vw}×${vh} | top:${insets.top} right:${insets.right} bottom:${insets.bottom} left:${insets.left} | ${displayMode} standalone:${isStandalone}`);
+    };
+    // Log on orientation change with debounce (iOS viewport settling + avoid spam)
+    let saDebounce = null;
+    const orientHandler = () => {
+      clearTimeout(saDebounce);
+      saDebounce = setTimeout(logSafeAreaInsets, 300);
+    };
+    window.addEventListener('resize', orientHandler);
+    window.addEventListener('orientationchange', orientHandler);
+    // Log initial state
+    logSafeAreaInsets();
+
     // Start button
     document.getElementById('start-btn').addEventListener('click', () => this.startCapture());
 
@@ -815,6 +846,12 @@ class App {
       <div class="debug-line"><span class="debug-label">App Mode</span> <span id="dbg-appmode">--</span></div>
       <div class="debug-line"><span class="debug-label">Wake Lock</span> <span id="dbg-wakelock">--</span></div>
       <div class="debug-line"><span class="debug-label">WL Event</span> <span id="dbg-wlevent">--</span></div>
+      <div class="debug-line"><span class="debug-label">Viewport</span> <span id="dbg-viewport">--</span></div>
+      <div class="debug-line"><span class="debug-label">Orient</span> <span id="dbg-orient">--</span></div>
+      <div class="debug-line"><span class="debug-label">SA Top</span> <span id="dbg-sa-top">--</span></div>
+      <div class="debug-line"><span class="debug-label">SA Right</span> <span id="dbg-sa-right">--</span></div>
+      <div class="debug-line"><span class="debug-label">SA Bottom</span> <span id="dbg-sa-bottom">--</span></div>
+      <div class="debug-line"><span class="debug-label">SA Left</span> <span id="dbg-sa-left">--</span></div>
       <div id="dbg-timing" class="debug-timing"></div>
       <div id="dbg-frozen" class="debug-frozen" style="display:none">FROZEN</div>
       <div id="dbg-freeze-tap" class="debug-freeze-tap">⏸</div>
@@ -838,6 +875,9 @@ class App {
         border-radius: 6px;
         pointer-events: none;
         min-width: 180px;
+        max-height: calc(100vh - 20px);
+        max-height: calc(100dvh - 20px);
+        overflow-y: auto;
         backdrop-filter: blur(4px);
         -webkit-backdrop-filter: blur(4px);
       }
@@ -924,6 +964,12 @@ class App {
       appMode: document.getElementById('dbg-appmode'),
       wakeLock: document.getElementById('dbg-wakelock'),
       wlEvent: document.getElementById('dbg-wlevent'),
+      viewport: document.getElementById('dbg-viewport'),
+      orient: document.getElementById('dbg-orient'),
+      saTop: document.getElementById('dbg-sa-top'),
+      saRight: document.getElementById('dbg-sa-right'),
+      saBottom: document.getElementById('dbg-sa-bottom'),
+      saLeft: document.getElementById('dbg-sa-left'),
       frozenLabel: document.getElementById('dbg-frozen'),
       frozen: false,
       fpsHistory: [],
@@ -1024,6 +1070,38 @@ class App {
       d.wakeLock.style.color = this._wakeLockStatus === 'Held' ? '#4caf50' : this._wakeLockStatus === 'Failed' ? '#f44336' : '#ffc107';
       d.wlEvent.textContent = this._wakeLockLastEvent || '--';
     }
+
+    // Viewport + safe area insets (critical for standalone mode debugging)
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const isLandscape = vw > vh;
+    d.viewport.textContent = `${vw}×${vh}`;
+    d.orient.textContent = isLandscape ? 'Landscape' : 'Portrait';
+    d.orient.style.color = isLandscape ? '#64b5f6' : '#ccc';
+
+    // Read live safe area insets via probe element
+    const saProbe = document.createElement('div');
+    saProbe.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;padding-top:env(safe-area-inset-top,0px);padding-right:env(safe-area-inset-right,0px);padding-bottom:env(safe-area-inset-bottom,0px);padding-left:env(safe-area-inset-left,0px);pointer-events:none;visibility:hidden;z-index:-1;';
+    document.body.appendChild(saProbe);
+    const saCS = getComputedStyle(saProbe);
+    const saInsets = {
+      top: parseFloat(saCS.paddingTop) || 0,
+      right: parseFloat(saCS.paddingRight) || 0,
+      bottom: parseFloat(saCS.paddingBottom) || 0,
+      left: parseFloat(saCS.paddingLeft) || 0,
+    };
+    saProbe.remove();
+
+    d.saTop.textContent = `${saInsets.top}px`;
+    d.saRight.textContent = `${saInsets.right}px`;
+    d.saBottom.textContent = `${saInsets.bottom}px`;
+    d.saLeft.textContent = `${saInsets.left}px`;
+
+    // Highlight non-zero insets in green
+    d.saTop.style.color = saInsets.top > 0 ? '#4caf50' : '#888';
+    d.saRight.style.color = saInsets.right > 0 ? '#4caf50' : '#888';
+    d.saBottom.style.color = saInsets.bottom > 0 ? '#4caf50' : '#888';
+    d.saLeft.style.color = saInsets.left > 0 ? '#4caf50' : '#888';
 
     // Per-layer and post-processing timing
     const engine = this.activeVisualizer?.engine || this.activeVisualizer;

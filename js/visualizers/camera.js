@@ -213,6 +213,10 @@ export class CameraVisualizer {
     this._warpMode = 'none';
     this._effectsHidden = false;
     this._floatingEls = []; // track floating UI elements for hide/show
+    this._orientationHandler = null;
+    this._leftStack = null;
+    this._rightStack = null;
+    this._bottomBar = null;
 
     const preset = LL_PRESETS[Math.floor(Math.random() * LL_PRESETS.length)];
     if (preset) {
@@ -341,6 +345,7 @@ export class CameraVisualizer {
     micBtn.addEventListener('click', () => this._toggleMic());
     leftStack.appendChild(micBtn);
 
+    this._leftStack = leftStack;
     panel.appendChild(leftStack);
 
     // --- Right floating stack ---
@@ -406,6 +411,7 @@ export class CameraVisualizer {
     this._warpMenu = warpMenu;
     rightStack.appendChild(warpMenu);
 
+    this._rightStack = rightStack;
     panel.appendChild(rightStack);
 
     // --- Bottom bar ---
@@ -436,6 +442,7 @@ export class CameraVisualizer {
     recordBtn.addEventListener('click', () => this._toggleRecording());
     bottomBar.appendChild(recordBtn);
 
+    this._bottomBar = bottomBar;
     panel.appendChild(bottomBar);
 
     // Track all floating elements for hide/show
@@ -457,6 +464,98 @@ export class CameraVisualizer {
 
     // Populate lens picker once camera is ready
     this._waitForLenses();
+
+    // --- Orientation change handler ---
+    // iOS Safari doesn't reliably update CSS env() safe area insets or trigger
+    // media query re-evaluation on orientation change. We listen for both
+    // resize and orientationchange, then apply safe area insets via JS.
+    this._applyOrientationLayout();
+    this._orientationDebounce = null;
+    this._orientationHandler = () => {
+      // Debounce to let iOS settle the viewport after rotation
+      clearTimeout(this._orientationDebounce);
+      this._orientationDebounce = setTimeout(() => this._applyOrientationLayout(), 200);
+    };
+    window.addEventListener('resize', this._orientationHandler);
+    window.addEventListener('orientationchange', this._orientationHandler);
+  }
+
+  /**
+   * Read CSS env() safe area insets at runtime and apply them as inline styles.
+   * This ensures Dynamic Island / home indicator clearance in all orientations,
+   * working around iOS Safari's unreliable CSS env() recalculation.
+   */
+  _applyOrientationLayout() {
+    if (!this.panelEl) return;
+
+    const isLandscape = window.innerWidth > window.innerHeight;
+    this.panelEl.classList.toggle('cam-landscape', isLandscape);
+
+    // Read live safe area inset values via CSS computed properties
+    const insets = this._getSafeAreaInsets();
+
+    // Left stack: clear Dynamic Island (left inset in landscape-left)
+    if (this._leftStack) {
+      const leftPad = Math.max(insets.left, 12) + 8;
+      this._leftStack.style.left = `${leftPad}px`;
+    }
+
+    // Right stack: clear home indicator area (right inset in landscape-right)
+    if (this._rightStack) {
+      const rightPad = Math.max(insets.right, 12) + 8;
+      this._rightStack.style.right = `${rightPad}px`;
+    }
+
+    // Bottom bar: horizontal safe areas + bottom
+    if (this._bottomBar) {
+      const bottomPad = Math.max(insets.bottom, 8) + 8;
+      const leftBarPad = Math.max(insets.left, 12) + 16;
+      const rightBarPad = Math.max(insets.right, 12) + 16;
+      this._bottomBar.style.paddingLeft = `${leftBarPad}px`;
+      this._bottomBar.style.paddingRight = `${rightBarPad}px`;
+      this._bottomBar.style.paddingBottom = `${bottomPad}px`;
+    }
+
+    // In landscape, adjust floating stack vertical position to avoid bottom bar overlap
+    if (isLandscape && this._leftStack && this._rightStack) {
+      // Move stacks higher so they don't collide with bottom bar
+      this._leftStack.style.top = '45%';
+      this._rightStack.style.top = '45%';
+    } else if (this._leftStack && this._rightStack) {
+      this._leftStack.style.top = '50%';
+      this._rightStack.style.top = '50%';
+    }
+
+    // Log applied values for debugging
+    const standalone = window.navigator.standalone === true || window.matchMedia('(display-mode: standalone)').matches;
+    console.log(`[CameraLayout] ${isLandscape ? 'LANDSCAPE' : 'PORTRAIT'} ${window.innerWidth}×${window.innerHeight} | insets: T${insets.top} R${insets.right} B${insets.bottom} L${insets.left} | standalone:${standalone} | applied: leftStack.left=${this._leftStack?.style.left} rightStack.right=${this._rightStack?.style.right} bar.padL=${this._bottomBar?.style.paddingLeft} bar.padR=${this._bottomBar?.style.paddingRight}`);
+  }
+
+  /**
+   * Read CSS env(safe-area-inset-*) values at runtime.
+   * Uses a probe element with padding set to env() values.
+   */
+  _getSafeAreaInsets() {
+    // Create a temporary probe element
+    const probe = document.createElement('div');
+    probe.style.cssText = `
+      position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+      padding-top: env(safe-area-inset-top, 0px);
+      padding-right: env(safe-area-inset-right, 0px);
+      padding-bottom: env(safe-area-inset-bottom, 0px);
+      padding-left: env(safe-area-inset-left, 0px);
+      pointer-events: none; visibility: hidden; z-index: -1;
+    `;
+    document.body.appendChild(probe);
+    const cs = getComputedStyle(probe);
+    const insets = {
+      top: parseFloat(cs.paddingTop) || 0,
+      right: parseFloat(cs.paddingRight) || 0,
+      bottom: parseFloat(cs.paddingBottom) || 0,
+      left: parseFloat(cs.paddingLeft) || 0,
+    };
+    probe.remove();
+    return insets;
   }
 
   _makeFloatBtn(icon, title) {
@@ -516,8 +615,17 @@ export class CameraVisualizer {
     this._cameraStarted = false;
     this._cameraFailed = false;
     if (this._app) this._app.mic.onStateChange = null;
+    // Remove orientation listeners
+    if (this._orientationHandler) {
+      window.removeEventListener('resize', this._orientationHandler);
+      window.removeEventListener('orientationchange', this._orientationHandler);
+      this._orientationHandler = null;
+    }
     if (this.panelEl) { this.panelEl.remove(); this.panelEl = null; }
     this._floatingEls = [];
+    this._leftStack = null;
+    this._rightStack = null;
+    this._bottomBar = null;
     this._micBtn = null;
     this._recordBtn = null;
     this._presetSelect = null;

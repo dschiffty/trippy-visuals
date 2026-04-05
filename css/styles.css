@@ -940,12 +940,12 @@ html, body {
   transition: opacity 0.3s ease, transform 0.3s ease;
 }
 .cam-float-left {
-  left: 12px;
+  left: calc(env(safe-area-inset-left, 0px) + 12px);
   top: 50%;
   transform: translateY(-50%);
 }
 .cam-float-right {
-  right: 12px;
+  right: calc(env(safe-area-inset-right, 0px) + 12px);
   top: 50%;
   transform: translateY(-50%);
 }
@@ -957,10 +957,10 @@ html, body {
   pointer-events: none !important;
 }
 .cam-float-left.cam-hidden {
-  transform: translateY(-50%) translateX(-40px);
+  transform: translateY(-50%) translateX(calc(-40px - env(safe-area-inset-left, 0px)));
 }
 .cam-float-right.cam-hidden {
-  transform: translateY(-50%) translateX(40px);
+  transform: translateY(-50%) translateX(calc(40px + env(safe-area-inset-right, 0px)));
 }
 
 /* Floating icon button */
@@ -1127,7 +1127,7 @@ html, body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 20px calc(env(safe-area-inset-bottom, 0px) + 12px);
+  padding: 12px calc(env(safe-area-inset-right, 0px) + 20px) calc(env(safe-area-inset-bottom, 0px) + 12px) calc(env(safe-area-inset-left, 0px) + 20px);
   background: rgba(0, 0, 0, 0.5);
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
@@ -1236,7 +1236,7 @@ html, body {
 /* Error toast for camera mode */
 .cam-error {
   position: absolute;
-  top: 80px;
+  top: calc(env(safe-area-inset-top, 0px) + 60px);
   left: 50%;
   transform: translateX(-50%);
   background: rgba(231, 76, 60, 0.9);
@@ -1252,6 +1252,81 @@ html, body {
 @keyframes cam-error-in {
   from { opacity: 0; transform: translateX(-50%) translateY(-8px); }
   to { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+
+/* ---- Camera mode: landscape layout ---- */
+/* JS adds .cam-landscape class on orientation change for reliable detection.
+   Also keep the media query as a CSS-only fallback. */
+.cam-landscape .cam-float-left,
+.cam-landscape .cam-float-right {
+  /* JS sets left/right/top inline — these are fallbacks */
+  max-height: calc(100vh - 100px);
+  max-height: calc(100dvh - 100px);
+  overflow: visible;
+}
+
+.cam-landscape .cam-bottom-bar {
+  padding-top: 8px;
+}
+
+/* Smaller shutter button in landscape to save space */
+.cam-landscape .cam-shutter {
+  width: 56px;
+  height: 56px;
+}
+.cam-landscape .cam-shutter-ring {
+  width: 44px;
+  height: 44px;
+}
+
+/* Smaller record button in landscape */
+.cam-landscape .cam-record {
+  width: 38px;
+  height: 38px;
+}
+.cam-landscape .cam-record-dot {
+  width: 16px;
+  height: 16px;
+}
+
+/* Shorter blend slider in landscape to prevent clipping */
+.cam-landscape .cam-blend-slider {
+  width: 70px;
+  margin: 33px 0;
+}
+.cam-landscape .cam-blend-wrap {
+  padding: 6px 8px;
+}
+
+/* Smaller floating buttons in landscape */
+.cam-landscape .cam-fbtn {
+  width: 38px;
+  height: 38px;
+  font-size: 17px;
+}
+.cam-landscape .cam-lens-btn {
+  width: 32px !important;
+  height: 32px !important;
+  font-size: 11px !important;
+}
+
+/* Tighter gap in floating stacks */
+.cam-landscape .cam-float {
+  gap: 6px;
+}
+
+/* CSS media query fallback (in case JS hasn't run yet) */
+@media (orientation: landscape) and (max-height: 500px) {
+  .cam-float-left {
+    left: calc(env(safe-area-inset-left, 0px) + 20px) !important;
+  }
+  .cam-float-right {
+    right: calc(env(safe-area-inset-right, 0px) + 20px) !important;
+  }
+  .cam-bottom-bar {
+    padding-left: calc(env(safe-area-inset-left, 0px) + 28px) !important;
+    padding-right: calc(env(safe-area-inset-right, 0px) + 28px) !important;
+  }
 }
 
 /* ---- Knobs ---- */
