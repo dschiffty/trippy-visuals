@@ -212,7 +212,7 @@ class App {
       // Tap canvas to toggle UI on all mobile modes
       this._mobileUIHidden = false;
       this.canvas.addEventListener('click', (e) => {
-        if (e.target.closest('.ll-lite-panel, .ll-gain-popover, .floating-mic, .control-panel button, .control-panel select, .floating-gain-popover')) return;
+        if (e.target.closest('.ll-lite-panel, .ll-gain-popover, .floating-mic, .control-panel button, .control-panel select, .floating-gain-popover, .cam-ui')) return;
         this._mobileUIHidden = !this._mobileUIHidden;
         this._updateMobileUIVisibility();
       });
@@ -586,11 +586,15 @@ class App {
     const controlPanel = document.querySelector('.control-panel');
     const floatingMic = this._floatingMicBtn;
 
-    // For Liquid Lite, delegate to its own panel toggle
+    // For Liquid Lite / Camera, delegate to its own panel toggle
     if (controlPanel.classList.contains('ll-active')) {
       controlPanel.classList.toggle('ll-ui-hidden', hidden);
       const llPanel = document.querySelector('.ll-lite-panel');
       if (llPanel) llPanel.classList.toggle('ll-ui-hidden', hidden);
+      // Camera mode floating UI
+      if (this.activeVisualizer?.setUIHidden) {
+        this.activeVisualizer.setUIHidden(hidden);
+      }
       return;
     }
 
