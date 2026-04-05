@@ -1052,6 +1052,9 @@ html, body {
 .cam-warp-item:active {
   background: rgba(255, 255, 255, 0.15);
 }
+.cam-warp-menu-right {
+  align-items: flex-end;
+}
 
 /* Blend slider (vertical, right side) */
 .cam-blend-wrap {

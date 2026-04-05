@@ -315,36 +315,6 @@ export class CameraVisualizer {
     this._lensContainer.className = 'cam-lens-container';
     leftStack.appendChild(this._lensContainer);
 
-    // Warp picker
-    const warpBtn = this._makeFloatBtn('FX', 'Effects');
-    warpBtn.classList.add('cam-fx-btn');
-    this._warpBtn = warpBtn;
-    this._warpMenuOpen = false;
-    warpBtn.addEventListener('click', () => {
-      this._warpMenuOpen = !this._warpMenuOpen;
-      this._warpMenu.classList.toggle('open', this._warpMenuOpen);
-    });
-    leftStack.appendChild(warpBtn);
-
-    // Warp submenu
-    const warpMenu = document.createElement('div');
-    warpMenu.className = 'cam-warp-menu';
-    WARP_MODES.forEach(mode => {
-      const item = document.createElement('button');
-      item.className = 'cam-warp-item' + (mode === this._warpMode ? ' active' : '');
-      item.textContent = WARP_LABELS[mode];
-      item.addEventListener('click', () => {
-        this._warpMode = mode;
-        warpMenu.querySelectorAll('.cam-warp-item').forEach(i => i.classList.remove('active'));
-        item.classList.add('active');
-        this._warpMenuOpen = false;
-        warpMenu.classList.remove('open');
-      });
-      warpMenu.appendChild(item);
-    });
-    this._warpMenu = warpMenu;
-    leftStack.appendChild(warpMenu);
-
     // Mic toggle
     const micBtn = this._makeFloatBtn('🎤', 'Mic');
     this._micBtn = micBtn;
@@ -389,6 +359,36 @@ export class CameraVisualizer {
     blendWrap.appendChild(blendSlider);
     blendWrap.appendChild(blendIcon);
     rightStack.appendChild(blendWrap);
+
+    // FX (warp) picker
+    const warpBtn = this._makeFloatBtn('FX', 'Effects');
+    warpBtn.classList.add('cam-fx-btn');
+    this._warpBtn = warpBtn;
+    this._warpMenuOpen = false;
+    warpBtn.addEventListener('click', () => {
+      this._warpMenuOpen = !this._warpMenuOpen;
+      this._warpMenu.classList.toggle('open', this._warpMenuOpen);
+    });
+    rightStack.appendChild(warpBtn);
+
+    // Warp submenu
+    const warpMenu = document.createElement('div');
+    warpMenu.className = 'cam-warp-menu cam-warp-menu-right';
+    WARP_MODES.forEach(mode => {
+      const item = document.createElement('button');
+      item.className = 'cam-warp-item' + (mode === this._warpMode ? ' active' : '');
+      item.textContent = WARP_LABELS[mode];
+      item.addEventListener('click', () => {
+        this._warpMode = mode;
+        warpMenu.querySelectorAll('.cam-warp-item').forEach(i => i.classList.remove('active'));
+        item.classList.add('active');
+        this._warpMenuOpen = false;
+        warpMenu.classList.remove('open');
+      });
+      warpMenu.appendChild(item);
+    });
+    this._warpMenu = warpMenu;
+    rightStack.appendChild(warpMenu);
 
     panel.appendChild(rightStack);
 
