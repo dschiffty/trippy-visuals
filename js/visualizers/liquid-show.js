@@ -1923,13 +1923,10 @@ export class LiquidShowVisualizer {
         const spinDir = layer._spinDir ?? 'cw';
         layer._spinAngle += spinSpeed * spinDt * (Math.PI / 6) * (spinDir === 'cw' ? 1 : -1);
       }
-      if (layer._spinAngle !== 0) {
-        // Copy current output to a tmp canvas, clear, then redraw rotated + over-scaled.
-        // Scale by diagonal/min(w,h) so content always covers the full canvas at any
-        // rotation angle — the rotated rectangle's nearest edge always extends past every
-        // viewport edge, leaving no exposed transparent corners.
-        // (For a square this equals √2; for 16:9 it is ≈2.04; √2 alone is not enough for
-        // non-square canvases.)
+      if (spinSpeed > 0) {
+        // Only apply the rotation transform when spin is actually running.
+        // Gating on spinSpeed (not _spinAngle) means the layer snaps back to
+        // normal 1:1 size the instant speed returns to zero, with no lingering zoom.
         if (!this._spinTmpCanvas) this._spinTmpCanvas = document.createElement('canvas');
         const stc = this._spinTmpCanvas;
         if (stc.width !== bw || stc.height !== bh) { stc.width = bw; stc.height = bh; }
