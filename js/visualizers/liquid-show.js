@@ -1595,16 +1595,16 @@ export class LiquidShowVisualizer {
     const isMono = layer.colorMode === 'mono';
 
     // Lightning-specific params (with defaults)
-    const freq        = layer._lightFreq       ?? 0.4;
-    const intensity   = layer._lightIntensity  ?? 0.6;
-    const branching   = layer._lightBranching  ?? 0.5;
-    const durationP   = layer._lightDuration   ?? 0.4;
+    const freq      = layer._lightFreq       ?? 0.4;
+    const intensity = layer._lightIntensity  ?? 0.6;
+    const branching = layer._lightBranching  ?? 0.5;
+    const durationP = layer._lightDuration   ?? 0.4;
 
     // 0..1 → real seconds, sharp flash + glow tail
-    const strikeDuration = 0.08 + durationP * 1.2;
-    layer._lightStrikeDuration = strikeDuration;
+    layer._lightStrikeDuration = 0.08 + durationP * 1.2;
 
-    // Audio-reactive boost on top of baseline frequency
+    const audioActive = layer.audioSync && layer.audioSource !== 'none';
+    // audioLevel is already source-filtered (bass/mids/treble/full/none) from _getAudioForLayer
     const audioBoost = audioLevel * reactivity;
 
     // Persistence / decay (background fade-out)
@@ -1622,23 +1622,28 @@ export class LiquidShowVisualizer {
     if (layer._lightNextTime === undefined) layer._lightNextTime = time + 0.05;
     if (layer._lightLastBeatTime === undefined) layer._lightLastBeatTime = 0;
 
-    // Baseline interval: freq=0 → ~5s rare, freq=1 → ~0.05s frequent. Audio shrinks it further.
-    const baseInt = 0.05 + Math.pow(1 - freq, 2.2) * 5;
-    const interval = baseInt / (1 + audioBoost * 4);
-
-    // Schedule baseline strikes
-    let safety = 8;
-    while (time >= layer._lightNextTime && layer._strikes.length < 14 && safety-- > 0) {
-      layer._strikes.push(this._spawnLightningStrike(layer, w, h, time, intensity, branching, audioBoost));
-      // Slight randomness around the interval so strikes don't feel periodic
-      layer._lightNextTime = time + interval * (0.6 + Math.random() * 0.8);
-    }
-
-    // Bass-triggered extra strike (audio reactivity layered on top)
-    const rawBass = (layer.audioSync && layer.audioSource !== 'none') ? this.smoothBass * reactivity : 0;
-    if (rawBass > 0.18 && time - layer._lightLastBeatTime > 0.12 && layer._strikes.length < 16) {
-      layer._lightLastBeatTime = time;
-      layer._strikes.push(this._spawnLightningStrike(layer, w, h, time, intensity, branching, audioBoost * 1.4));
+    if (audioActive) {
+      // --- Audio sensitivity mode ---
+      // Frequency = threshold lever: how loud audio needs to be to trigger a strike.
+      // freq=0 → only fires on very loud hits (threshold ≈ 0.65)
+      // freq=1 → fires on almost any audio (threshold ≈ 0.03)
+      const threshold = 0.03 + Math.pow(1 - freq, 1.8) * 0.62;
+      // Minimum gap between strikes: shorter at high freq
+      const cooldown = 0.06 + (1 - freq) * 0.28;
+      if (audioBoost > threshold && time - layer._lightLastBeatTime > cooldown && layer._strikes.length < 14) {
+        layer._lightLastBeatTime = time;
+        layer._lightNextTime = time + cooldown; // keep timer synced
+        layer._strikes.push(this._spawnLightningStrike(layer, w, h, time, intensity, branching, audioBoost));
+      }
+    } else {
+      // --- Pure rate mode (no audio) ---
+      // freq=0 → ~5 s between strikes, freq=1 → ~0.05 s
+      const baseInt = 0.05 + Math.pow(1 - freq, 2.2) * 5;
+      let safety = 8;
+      while (time >= layer._lightNextTime && layer._strikes.length < 14 && safety-- > 0) {
+        layer._strikes.push(this._spawnLightningStrike(layer, w, h, time, intensity, branching, 0));
+        layer._lightNextTime = time + baseInt * (0.6 + Math.random() * 0.8);
+      }
     }
 
     // Draw all live strikes
@@ -1646,7 +1651,7 @@ export class LiquidShowVisualizer {
     ctx.lineJoin = 'round';
     ctx.globalAlpha = opacity;
 
-    // Helper: stroke a path array with current style
+    // Helper: stroke a path array with current ctx style
     const strokePath = (path) => {
       if (path.length < 2) return;
       ctx.beginPath();
@@ -1661,55 +1666,55 @@ export class LiquidShowVisualizer {
       if (age >= s.duration) { layer._strikes.splice(i, 1); continue; }
 
       const t = age / s.duration; // 0..1
-      // Sharp flash spike at start (first 8% of life), then exponential glow tail
+      // Sharp flash spike at birth (first ~8% of lifetime), then exponential glow tail
       const flashWindow = 0.08;
       const flash = t < flashWindow ? 1 : Math.exp(-(t - flashWindow) * 5);
-      const glow = Math.exp(-t * 3.5);
+      const glow  = Math.exp(-t * 3.5);
 
-      const sat = isMono ? 0 : 0.55;
-      const baseLight = 70 + flash * 25;
       const baseW = (1 + intensity * 4 + scale * 0.5) * (s.type === 'arc' ? 1 : 0.85);
       const strikeAlpha = s.intensity;
 
-      // --- 1) Background bloom flash (lighter composite) ---
+      // Saturation: mono collapses to 0, otherwise high saturation so the hue is visible
+      const glowSat  = isMono ? 0 : 85;   // % — fully saturated colored glow
+      const glowLight = 52;                // % — mid-range so hue reads clearly through `lighter`
+
+      // --- 1) Bloom flash: white-hot at center, colored corona around it ---
       if (flash > 0.04) {
         ctx.globalCompositeOperation = 'lighter';
         const grad = ctx.createRadialGradient(s.flashX, s.flashY, 0, s.flashX, s.flashY, s.flashR);
-        const flashAlpha = Math.min(0.85, flash * strikeAlpha * 0.7);
-        grad.addColorStop(0, `hsla(${s.hue}, ${Math.round(sat * 100)}%, ${Math.round(baseLight)}%, ${flashAlpha})`);
-        grad.addColorStop(0.4, `hsla(${s.hue}, ${Math.round(sat * 100)}%, ${Math.round(baseLight - 20)}%, ${flashAlpha * 0.4})`);
-        grad.addColorStop(1, 'rgba(0,0,0,0)');
+        const fa = Math.min(0.75, flash * strikeAlpha * 0.65);
+        // Center: near-white blast; outer ring: hue-colored
+        grad.addColorStop(0,    `hsla(${s.hue}, ${isMono ? 0 : 15}%, 92%, ${fa})`);
+        grad.addColorStop(0.25, `hsla(${s.hue}, ${glowSat}%, 60%, ${fa * 0.7})`);
+        grad.addColorStop(0.65, `hsla(${s.hue}, ${glowSat}%, ${glowLight}%, ${fa * 0.3})`);
+        grad.addColorStop(1,    'rgba(0,0,0,0)');
         ctx.fillStyle = grad;
         ctx.fillRect(s.flashX - s.flashR, s.flashY - s.flashR, s.flashR * 2, s.flashR * 2);
       }
 
-      // --- 2) Outer glow halo on bolts (lighter composite, wide soft strokes) ---
+      // --- 2) Outer glow halo — wide, colored, fades with glow curve ---
       ctx.globalCompositeOperation = 'lighter';
-      const haloAlpha = Math.min(0.6, (glow * 0.5 + flash * 0.4) * strikeAlpha);
+      const haloAlpha = Math.min(0.55, (glow * 0.55 + flash * 0.3) * strikeAlpha);
       if (haloAlpha > 0.02) {
-        ctx.strokeStyle = `hsla(${s.hue}, ${Math.round(sat * 100)}%, ${Math.round(baseLight - 5)}%, ${haloAlpha})`;
-        ctx.lineWidth = baseW * 4 + flash * 3;
+        ctx.strokeStyle = `hsla(${s.hue}, ${glowSat}%, ${glowLight}%, ${haloAlpha})`;
+        ctx.lineWidth = baseW * 5 + flash * 4;
         strokePath(s.main);
-        for (let b = 0; b < s.branches.length; b++) {
-          ctx.lineWidth = baseW * 2.2 + flash * 1.5;
-          strokePath(s.branches[b]);
-        }
+        ctx.lineWidth = baseW * 2.5 + flash * 2;
+        for (let b = 0; b < s.branches.length; b++) strokePath(s.branches[b]);
       }
 
-      // --- 3) Crisp white-hot core (source-over so colour mixes brightly) ---
+      // --- 3) Core bolt — white-hot during flash, transitions to hue-colored glow tail ---
       ctx.globalCompositeOperation = 'lighter';
-      const coreAlpha = Math.min(1, (flash * 0.95 + glow * 0.35) * strikeAlpha);
+      const coreAlpha = Math.min(1, (flash * 0.9 + glow * 0.4) * strikeAlpha);
       if (coreAlpha > 0.03) {
-        // Core is nearly white during flash, then fades back to hue
-        const coreLight = isMono ? Math.min(99, 80 + flash * 19) : Math.min(99, 85 + flash * 14);
-        const coreSat = isMono ? 0 : Math.max(0.05, 0.4 - flash * 0.35);
-        ctx.strokeStyle = `hsla(${s.hue}, ${Math.round(coreSat * 100)}%, ${Math.round(coreLight)}%, ${coreAlpha})`;
-        ctx.lineWidth = Math.max(1, baseW * (1 + flash * 0.5));
+        // At flash=1: nearly white (hot impact). As flash→0: full hue color (glow residue).
+        const coreSat   = isMono ? 0 : Math.round(glowSat * (1 - flash * 0.92));
+        const coreLight = Math.round(isMono ? 60 + flash * 38 : 58 + flash * 40);
+        ctx.strokeStyle = `hsla(${s.hue}, ${coreSat}%, ${Math.min(98, coreLight)}%, ${coreAlpha})`;
+        ctx.lineWidth = Math.max(1, baseW * (1 + flash * 0.6));
         strokePath(s.main);
         ctx.lineWidth = Math.max(0.7, baseW * 0.55);
-        for (let b = 0; b < s.branches.length; b++) {
-          strokePath(s.branches[b]);
-        }
+        for (let b = 0; b < s.branches.length; b++) strokePath(s.branches[b]);
       }
     }
 
