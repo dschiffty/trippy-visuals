@@ -307,6 +307,9 @@ export class LiquidShowVisualizer {
         hue: l.hue,
         offset: { ...l.offset },
         imageSrc: l.type === 'image' && l.imageData ? l.imageData.src : undefined,
+        imgPanMode:    l.type === 'image' ? (l._imgPanMode    ?? 'off') : undefined,
+        imgPanSpeed:   l.type === 'image' ? (l._imgPanSpeed   ?? 0.3)   : undefined,
+        imgMotionBlur: l.type === 'image' ? (l._imgMotionBlur ?? 0)     : undefined,
         lissajousShape: l.type === 'lissajous' ? (l._lissajousShape || 2) : undefined,
         pulseMode: l.type === 'pulse' ? (l._pulseMode || 'constant') : undefined,
         starsRotSpeed: l.type === 'stars' ? (l._starsRotSpeed ?? 0) : undefined,
@@ -352,6 +355,11 @@ export class LiquidShowVisualizer {
           img.crossOrigin = 'anonymous';
           img.src = saved.imageSrc;
           layer.imageData = img;
+        }
+        if (saved.type === 'image') {
+          if (saved.imgPanMode    !== undefined) layer._imgPanMode    = saved.imgPanMode;
+          if (saved.imgPanSpeed   !== undefined) layer._imgPanSpeed   = saved.imgPanSpeed;
+          if (saved.imgMotionBlur !== undefined) layer._imgMotionBlur = saved.imgMotionBlur;
         }
         // Restore lissajous shape
         if (saved.type === 'lissajous' && saved.lissajousShape !== undefined) {
@@ -664,6 +672,46 @@ export class LiquidShowVisualizer {
     const t = time * speed * 0.3;
     const audioMod = audioLevel * reactivity;
 
+    // --- Pan state ---
+    const panMode  = layer._imgPanMode  ?? 'off';
+    const panSpeed = layer._imgPanSpeed ?? 0.3;
+    const motionBlur = layer._imgMotionBlur ?? 0;
+
+    // Per-frame dt for wander integration
+    if (layer._imgLastTime === undefined) layer._imgLastTime = time;
+    const dt = Math.min(0.1, time - layer._imgLastTime);
+    layer._imgLastTime = time;
+    if (layer._imgWanderX === undefined) layer._imgWanderX = 0;
+    if (layer._imgWanderY === undefined) layer._imgWanderY = 0;
+
+    // Compute pan offset in pixels
+    let panOffX = 0, panOffY = 0;
+    if (panMode === 'pendulum') {
+      // Organic sine-wave sway — dual axes at slightly different frequencies
+      const freq = (0.04 + panSpeed * 0.1) * Math.PI * 2;
+      const amp  = 25 + panSpeed * 95; // 25–120 px amplitude
+      panOffX = amp * Math.sin(time * freq);
+      panOffY = amp * 0.38 * Math.sin(time * freq * 0.71 + 1.1);
+    } else if (panMode === 'wander') {
+      // Direction driven by smooth noise — never jerky, never stops
+      const noiseFreq = 0.04 + panSpeed * 0.06;
+      const wanderAngle = noise2D(time * noiseFreq + layer.offset.x * 0.01,
+                                  time * noiseFreq * 0.8 + layer.offset.y * 0.01) * Math.PI * 2;
+      const vel = (8 + panSpeed * 52) * dt; // 8–60 px/s
+      layer._imgWanderX += Math.cos(wanderAngle) * vel;
+      layer._imgWanderY += Math.sin(wanderAngle) * vel;
+      // Soft pull back to centre so it doesn't drift off permanently
+      const maxDist = 80 + panSpeed * 120;
+      const d = Math.hypot(layer._imgWanderX, layer._imgWanderY);
+      if (d > maxDist) {
+        const pull = Math.min(0.06, (d - maxDist) / d * 0.1);
+        layer._imgWanderX *= (1 - pull);
+        layer._imgWanderY *= (1 - pull);
+      }
+      panOffX = layer._imgWanderX;
+      panOffY = layer._imgWanderY;
+    }
+
     // Draw the source image to a temp canvas at buffer size if needed
     if (!layer._imgCanvas || layer._imgCanvas.width !== bw || layer._imgCanvas.height !== bh) {
       layer._imgCanvas = document.createElement('canvas');
@@ -716,9 +764,9 @@ export class LiquidShowVisualizer {
         const ripple = turbulence > 0.01 ?
           noise2D((nx + warpX) * 4, (ny + warpY) * 4 + t * 0.3) * turbulence * audioDist * 0.5 : 0;
 
-        // Map back to pixel coordinates
-        let srcX = ((nx + warpX + ripple) / (audioScl * 2) + 0.5) * bw;
-        let srcY = ((ny + warpY + ripple) / (audioScl * 2) + 0.5) * bh;
+        // Map back to pixel coordinates, incorporating pan offset
+        let srcX = ((nx + warpX + ripple) / (audioScl * 2) + 0.5) * bw + panOffX;
+        let srcY = ((ny + warpY + ripple) / (audioScl * 2) + 0.5) * bh + panOffY;
 
         // Wrap around
         srcX = ((srcX % bw) + bw) % bw;
@@ -760,7 +808,41 @@ export class LiquidShowVisualizer {
         data[idx + 3] = 255;
       }
     }
-    ctx.putImageData(imageData, 0, 0);
+
+    if (motionBlur < 0.01) {
+      // No blur — direct write
+      ctx.putImageData(imageData, 0, 0);
+    } else {
+      // Frame compositing: accumulate on a persistent off-screen canvas,
+      // creating a soft ghostly smear in the direction of motion.
+      if (!layer._panAccCanvas ||
+          layer._panAccCanvas.width !== bw ||
+          layer._panAccCanvas.height !== bh) {
+        layer._panAccCanvas = document.createElement('canvas');
+        layer._panAccCanvas.width = bw;
+        layer._panAccCanvas.height = bh;
+      }
+      if (!layer._panTmpCanvas ||
+          layer._panTmpCanvas.width !== bw ||
+          layer._panTmpCanvas.height !== bh) {
+        layer._panTmpCanvas = document.createElement('canvas');
+        layer._panTmpCanvas.width = bw;
+        layer._panTmpCanvas.height = bh;
+      }
+      const accCtx = layer._panAccCanvas.getContext('2d');
+      // Fade the accumulated buffer — less fade = more persistent smear
+      const persist = motionBlur * 0.90;
+      accCtx.globalCompositeOperation = 'source-over';
+      accCtx.fillStyle = `rgba(0,0,0,${(1 - persist).toFixed(3)})`;
+      accCtx.fillRect(0, 0, bw, bh);
+      // Stamp new frame onto acc buffer
+      layer._panTmpCanvas.getContext('2d').putImageData(imageData, 0, 0);
+      accCtx.globalAlpha = 1;
+      accCtx.drawImage(layer._panTmpCanvas, 0, 0);
+      // Output acc buffer to layer canvas
+      ctx.clearRect(0, 0, bw, bh);
+      ctx.drawImage(layer._panAccCanvas, 0, 0);
+    }
   }
 
   _renderScope(layer, ctx, w, h, time, audioLevel) {
@@ -2273,6 +2355,9 @@ export class LiquidShowVisualizer {
         colorMode: l.colorMode, hue: l.hue,
         offset: { ...l.offset },
         imageSrc: l.type === 'image' && l.imageData ? l.imageData.src : undefined,
+        imgPanMode:    l.type === 'image' ? (l._imgPanMode    ?? 'off') : undefined,
+        imgPanSpeed:   l.type === 'image' ? (l._imgPanSpeed   ?? 0.3)   : undefined,
+        imgMotionBlur: l.type === 'image' ? (l._imgMotionBlur ?? 0)     : undefined,
         lissajousShape: l.type === 'lissajous' ? (l._lissajousShape || 2) : undefined,
         pulseMode: l.type === 'pulse' ? (l._pulseMode || 'constant') : undefined,
         starsRotSpeed: l.type === 'stars' ? (l._starsRotSpeed ?? 0) : undefined,
@@ -2340,6 +2425,11 @@ export class LiquidShowVisualizer {
         img.crossOrigin = 'anonymous';
         img.src = saved.imageSrc;
         layer.imageData = img;
+      }
+      if (saved.type === 'image') {
+        if (saved.imgPanMode    !== undefined) layer._imgPanMode    = saved.imgPanMode;
+        if (saved.imgPanSpeed   !== undefined) layer._imgPanSpeed   = saved.imgPanSpeed;
+        if (saved.imgMotionBlur !== undefined) layer._imgMotionBlur = saved.imgMotionBlur;
       }
       if (saved.type === 'lissajous' && saved.lissajousShape !== undefined) {
         layer._lissajousShape = saved.lissajousShape;
@@ -2468,6 +2558,11 @@ export class LiquidShowVisualizer {
         layer.type = typeSelect.value;
         layer._imgCanvas = null;
         layer._imgPixels = null;
+        layer._panAccCanvas = null;
+        layer._panTmpCanvas = null;
+        layer._imgLastTime = undefined;
+        layer._imgWanderX = undefined;
+        layer._imgWanderY = undefined;
         layer._pulseRings = null;
         layer._lastPulseTime = null;
         layer._stars = null;
@@ -2737,6 +2832,90 @@ export class LiquidShowVisualizer {
         galleryGrid.appendChild(thumb);
       });
       container.appendChild(galleryGrid);
+
+      // --- Pan Mode picker ---
+      const imgLabelCss = 'font-size:9px;font-weight:bold;color:#000;white-space:nowrap;';
+      const panRow = document.createElement('div');
+      panRow.className = 'll-image-row';
+      panRow.style.cssText = 'gap:4px;flex-wrap:wrap;';
+      const panLabel = document.createElement('span');
+      panLabel.style.cssText = imgLabelCss + 'margin-right:2px;';
+      panLabel.textContent = 'Pan:';
+      panRow.appendChild(panLabel);
+      const currentPanMode = layer._imgPanMode ?? 'off';
+      [['off', 'Off'], ['pendulum', 'Pendulum'], ['wander', 'Wander']].forEach(([key, label]) => {
+        const btn = document.createElement('button');
+        btn.className = 'll-toggle' + (currentPanMode === key ? ' active' : '');
+        btn.textContent = label;
+        btn.dataset.panMode = key;
+        btn.style.cssText = 'padding:2px 6px;font-size:9px;';
+        btn.addEventListener('click', () => {
+          if (this._isLayerLocked(this.selectedLayerIndex)) return;
+          layer._imgPanMode = key;
+          // Reset wander position so new mode starts clean
+          layer._imgWanderX = 0;
+          layer._imgWanderY = 0;
+          panRow.querySelectorAll('[data-pan-mode]').forEach(b => b.classList.remove('active'));
+          btn.classList.add('active');
+          this._pushHistory();
+        });
+        panRow.appendChild(btn);
+      });
+      container.appendChild(panRow);
+
+      // --- Pan Speed slider ---
+      const panSpeedRow = document.createElement('div');
+      panSpeedRow.className = 'll-image-row';
+      panSpeedRow.style.gap = '6px';
+      const panSpeedLabel = document.createElement('span');
+      panSpeedLabel.style.cssText = imgLabelCss;
+      panSpeedLabel.textContent = 'Pan Speed:';
+      panSpeedRow.appendChild(panSpeedLabel);
+      const panSpeedSlider = document.createElement('input');
+      panSpeedSlider.type = 'range';
+      panSpeedSlider.className = 'll-row-slider';
+      panSpeedSlider.min = '0'; panSpeedSlider.max = '1'; panSpeedSlider.step = '0.025';
+      panSpeedSlider.value = String(layer._imgPanSpeed ?? 0.3);
+      const panSpeedVal = document.createElement('span');
+      panSpeedVal.style.cssText = 'font-size:10px;color:#aaa;min-width:28px;text-align:right;';
+      panSpeedVal.textContent = Number(panSpeedSlider.value).toFixed(2);
+      panSpeedSlider.addEventListener('input', () => {
+        if (this._isLayerLocked(this.selectedLayerIndex)) return;
+        layer._imgPanSpeed = parseFloat(panSpeedSlider.value);
+        panSpeedVal.textContent = layer._imgPanSpeed.toFixed(2);
+        this._pushHistory();
+      });
+      panSpeedRow.appendChild(panSpeedSlider);
+      panSpeedRow.appendChild(panSpeedVal);
+      container.appendChild(panSpeedRow);
+
+      // --- Motion Blur slider ---
+      const blurRow = document.createElement('div');
+      blurRow.className = 'll-image-row';
+      blurRow.style.gap = '6px';
+      const blurLabel = document.createElement('span');
+      blurLabel.style.cssText = imgLabelCss;
+      blurLabel.textContent = 'Motion Blur:';
+      blurRow.appendChild(blurLabel);
+      const blurSlider = document.createElement('input');
+      blurSlider.type = 'range';
+      blurSlider.className = 'll-row-slider';
+      blurSlider.min = '0'; blurSlider.max = '1'; blurSlider.step = '0.025';
+      blurSlider.value = String(layer._imgMotionBlur ?? 0);
+      const blurVal = document.createElement('span');
+      blurVal.style.cssText = 'font-size:10px;color:#aaa;min-width:28px;text-align:right;';
+      blurVal.textContent = Number(blurSlider.value).toFixed(2);
+      blurSlider.addEventListener('input', () => {
+        if (this._isLayerLocked(this.selectedLayerIndex)) return;
+        layer._imgMotionBlur = parseFloat(blurSlider.value);
+        // Reset accumulation canvas so old smear doesn't carry over
+        layer._panAccCanvas = null;
+        blurVal.textContent = layer._imgMotionBlur.toFixed(2);
+        this._pushHistory();
+      });
+      blurRow.appendChild(blurSlider);
+      blurRow.appendChild(blurVal);
+      container.appendChild(blurRow);
     }
 
     // Pulse mode selector (only for pulse layers, single-select only)
