@@ -765,8 +765,14 @@ export class LiquidShowVisualizer {
           noise2D((nx + warpX) * 4, (ny + warpY) * 4 + t * 0.3) * turbulence * audioDist * 0.5 : 0;
 
         // Map back to pixel coordinates, incorporating pan offset
-        let srcX = ((nx + warpX + ripple) / (audioScl * 2) + 0.5) * bw + panOffX;
-        let srcY = ((ny + warpY + ripple) / (audioScl * 2) + 0.5) * bh + panOffY;
+        let pxOffX = panOffX, pxOffY = panOffY;
+        if (panMode === 'wave') {
+          const waveAmp = motionBlur * 35;
+          pxOffX = waveAmp * Math.sin(py * (Math.PI * 2 / (bh * 0.4)) + time * panSpeed * 4);
+          pxOffY = waveAmp * 0.6 * Math.sin(px * (Math.PI * 2 / (bw * 0.5)) + time * panSpeed * 3 + 1.8);
+        }
+        let srcX = ((nx + warpX + ripple) / (audioScl * 2) + 0.5) * bw + pxOffX;
+        let srcY = ((ny + warpY + ripple) / (audioScl * 2) + 0.5) * bh + pxOffY;
 
         // Wrap around
         srcX = ((srcX % bw) + bw) % bw;
@@ -809,12 +815,14 @@ export class LiquidShowVisualizer {
       }
     }
 
-    if (motionBlur < 0.01) {
-      // No blur — direct write
+    if (motionBlur < 0.01 || panMode === 'wave') {
+      // No blur (or Wave mode — wave uses per-pixel UV warp, not accumulation)
       ctx.putImageData(imageData, 0, 0);
     } else {
-      // Frame compositing: accumulate on a persistent off-screen canvas,
-      // creating a soft ghostly smear in the direction of motion.
+      // Frame compositing via two-canvas blend.
+      // Strategy: write new frame to tmp, then draw OLD accumulator ON TOP at
+      // globalAlpha=persist (source-over gives: persist*old + (1-persist)*new).
+      // This avoids putImageData's fully-opaque overwrite problem.
       if (!layer._panAccCanvas ||
           layer._panAccCanvas.width !== bw ||
           layer._panAccCanvas.height !== bh) {
@@ -829,17 +837,22 @@ export class LiquidShowVisualizer {
         layer._panTmpCanvas.width = bw;
         layer._panTmpCanvas.height = bh;
       }
-      const accCtx = layer._panAccCanvas.getContext('2d');
-      // Fade the accumulated buffer — less fade = more persistent smear
       const persist = motionBlur * 0.90;
-      accCtx.globalCompositeOperation = 'source-over';
-      accCtx.fillStyle = `rgba(0,0,0,${(1 - persist).toFixed(3)})`;
-      accCtx.fillRect(0, 0, bw, bh);
-      // Stamp new frame onto acc buffer
-      layer._panTmpCanvas.getContext('2d').putImageData(imageData, 0, 0);
-      accCtx.globalAlpha = 1;
+      const tmpCtx = layer._panTmpCanvas.getContext('2d');
+      // Step 1: write new frame to tmp canvas
+      tmpCtx.putImageData(imageData, 0, 0);
+      // Step 2: draw old accumulator on top of new frame at persist opacity
+      // source-over formula: output = persist*oldAcc + (1-persist)*newFrame
+      if (persist > 0.001) {
+        tmpCtx.globalAlpha = persist;
+        tmpCtx.drawImage(layer._panAccCanvas, 0, 0);
+        tmpCtx.globalAlpha = 1;
+      }
+      // Step 3: copy tmp → acc
+      const accCtx = layer._panAccCanvas.getContext('2d');
+      accCtx.clearRect(0, 0, bw, bh);
       accCtx.drawImage(layer._panTmpCanvas, 0, 0);
-      // Output acc buffer to layer canvas
+      // Step 4: copy acc → output
       ctx.clearRect(0, 0, bw, bh);
       ctx.drawImage(layer._panAccCanvas, 0, 0);
     }
@@ -2843,7 +2856,7 @@ export class LiquidShowVisualizer {
       panLabel.textContent = 'Pan:';
       panRow.appendChild(panLabel);
       const currentPanMode = layer._imgPanMode ?? 'off';
-      [['off', 'Off'], ['pendulum', 'Pendulum'], ['wander', 'Wander']].forEach(([key, label]) => {
+      [['off', 'Off'], ['pendulum', 'Pendulum'], ['wander', 'Wander'], ['wave', 'Wave']].forEach(([key, label]) => {
         const btn = document.createElement('button');
         btn.className = 'll-toggle' + (currentPanMode === key ? ' active' : '');
         btn.textContent = label;
@@ -2895,7 +2908,7 @@ export class LiquidShowVisualizer {
       blurRow.style.gap = '6px';
       const blurLabel = document.createElement('span');
       blurLabel.style.cssText = imgLabelCss;
-      blurLabel.textContent = 'Motion Blur:';
+      blurLabel.textContent = (layer._imgPanMode === 'wave') ? 'Wave Intensity:' : 'Motion Blur:';
       blurRow.appendChild(blurLabel);
       const blurSlider = document.createElement('input');
       blurSlider.type = 'range';
