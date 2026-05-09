@@ -78,8 +78,8 @@ function hslToRgb(h, s, l) {
 }
 
 // --- Layer Type Constants ---
-const LAYER_TYPES = ['wash', 'blob', 'marbling', 'bubble', 'image', 'scope', 'pulse', 'lissajous'];
-const LAYER_TYPE_LABELS = { wash: 'Wash', blob: 'Blob', marbling: 'Marbling', bubble: 'Bubble', image: 'Image', scope: 'Scope', pulse: 'Pulse', lissajous: 'Lissajous' };
+const LAYER_TYPES = ['wash', 'blob', 'marbling', 'bubble', 'image', 'scope', 'pulse', 'lissajous', 'stars'];
+const LAYER_TYPE_LABELS = { wash: 'Wash', blob: 'Blob', marbling: 'Marbling', bubble: 'Bubble', image: 'Image', scope: 'Scope', pulse: 'Pulse', lissajous: 'Lissajous', stars: 'Stars' };
 const BLEND_MODES = [
   { value: 'source-over', label: 'Normal' },
   { value: 'lighter', label: 'Add' },
@@ -89,7 +89,7 @@ const BLEND_MODES = [
   { value: 'difference', label: 'Difference' },
 ];
 const AUDIO_SOURCES = ['none', 'bass', 'mids', 'highs', 'full'];
-const LAYER_SCALES = { wash: 8, blob: 6, marbling: 7, bubble: 7, image: 4, scope: 1, pulse: 1, lissajous: 1 };
+const LAYER_SCALES = { wash: 8, blob: 6, marbling: 7, bubble: 7, image: 4, scope: 1, pulse: 1, lissajous: 1, stars: 1 };
 
 // --- Lissajous Shape Definitions (from lissajous.js) ---
 const LISSAJOUS_SHAPES = [
@@ -1190,6 +1190,181 @@ export class LiquidShowVisualizer {
     ctx.globalAlpha = 1;
   }
 
+  /**
+   * Stars / hyperspace warp tunnel.
+   * Particles spawn near a central vanishing point and fly outward radially,
+   * elongating into streaks as they accelerate. Speed slider + audio reactivity
+   * combine to control velocity and streak length.
+   */
+  _renderStars(layer, ctx, w, h, time, audioLevel) {
+    const { scale, speed, turbulence, opacity, drift, distortion, reactivity } = layer.params;
+    const hNorm = layer.hue / 360;
+    const isMono = layer.colorMode === 'mono';
+
+    // Audio: louder = faster + longer streaks (only when audioSync is on)
+    const audioBoost = audioLevel * reactivity;
+    // Map slider speed (0–2) to base radial velocity in px/sec
+    // At speed=0: very slow drift; at speed=2: fast warp; audio boost adds on top
+    const baseVel = 80 + speed * 600;
+    const audioVelBoost = audioBoost * 800; // significant audio kick
+    const radialVel = baseVel + audioVelBoost;
+
+    // Streak length factor — multiplier for the line length drawn each frame
+    // Higher speed/audio = longer streaks. Length = streakFactor * frame's radial step.
+    const streakFactor = 1.5 + speed * 2.5 + audioBoost * 6;
+
+    // Persistence — distortion controls trail decay (similar to pulse)
+    const decay = distortion;
+    if (decay > 0.01) {
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.fillStyle = `rgba(0, 0, 0, ${1 - decay * 0.92})`;
+      ctx.fillRect(0, 0, w, h);
+    } else {
+      ctx.clearRect(0, 0, w, h);
+    }
+
+    // Per-layer stars state
+    if (!layer._stars) layer._stars = [];
+    if (layer._lastStarsTime === undefined) layer._lastStarsTime = time;
+
+    const dt = Math.min(0.1, Math.max(0, time - layer._lastStarsTime));
+    layer._lastStarsTime = time;
+
+    // Vanishing point with optional drift
+    const driftX = drift * 30 * Math.sin(time * 0.13 + layer.offset.x);
+    const driftY = drift * 30 * Math.cos(time * 0.11 + layer.offset.y);
+    const cx = w / 2 + driftX;
+    const cy = h / 2 + driftY;
+
+    // Maximum visible radius (corner-to-center distance, with margin)
+    const maxR = Math.sqrt((w * 0.5) ** 2 + (h * 0.5) ** 2) * 1.15;
+
+    // Target population — scales with layer scale; audio adds extra density
+    // Cap to keep performance solid on mobile
+    const targetCount = Math.min(
+      350,
+      Math.floor(80 + scale * 100 + audioBoost * 80)
+    );
+
+    // Spawn new particles to reach target count
+    while (layer._stars.length < targetCount) {
+      const angle = Math.random() * Math.PI * 2;
+      // Spawn at a small random initial radius so they don't all start at the
+      // exact center (which would render as a single bright dot)
+      const r0 = Math.random() * Math.min(w, h) * 0.05 + 1;
+      layer._stars.push({
+        angle,
+        r: r0,
+        prevR: r0,
+        // Per-particle speed multiplier for natural variation
+        velMul: 0.5 + Math.random() * 0.9,
+        // Brightness variation
+        brightness: 0.55 + Math.random() * 0.45,
+        // Hue offset for subtle color variation
+        hueOffset: (Math.random() - 0.5) * 0.06,
+      });
+    }
+
+    // Update particles + collect draw data (separated into two passes for perf)
+    // Pass 1: thick semi-transparent strokes for glow halo
+    // Pass 2: thin bright strokes for the core streak
+    // Avoiding ctx.shadowBlur which triggers a costly per-stroke compositing pass.
+    const drawList = [];
+    for (let i = layer._stars.length - 1; i >= 0; i--) {
+      const star = layer._stars[i];
+      star.prevR = star.r;
+      star.r += radialVel * star.velMul * dt;
+
+      if (star.r > maxR) {
+        // Recycle particle back near center
+        star.angle = Math.random() * Math.PI * 2;
+        star.r = Math.random() * Math.min(w, h) * 0.04 + 1;
+        star.prevR = star.r;
+        star.velMul = 0.5 + Math.random() * 0.9;
+        star.brightness = 0.55 + Math.random() * 0.45;
+        star.hueOffset = (Math.random() - 0.5) * 0.06;
+        continue;
+      }
+
+      // Streak start/end positions; clamp length so very fast motion doesn't
+      // render absurdly long lines off-screen
+      const step = star.r - star.prevR;
+      const streakLen = Math.min(maxR * 0.6, step * streakFactor);
+      const tailR = Math.max(0, star.r - streakLen);
+
+      const cosA = Math.cos(star.angle);
+      const sinA = Math.sin(star.angle);
+      drawList.push({
+        x1: cx + cosA * tailR,
+        y1: cy + sinA * tailR,
+        x2: cx + cosA * star.r,
+        y2: cy + sinA * star.r,
+        depth: star.r / maxR,
+        brightness: star.brightness,
+        hueOffset: star.hueOffset,
+      });
+    }
+
+    ctx.lineCap = 'round';
+    ctx.globalAlpha = opacity;
+
+    // Glow pass — only render if turbulence or audio actually contribute glow
+    const glowStrength = turbulence * 0.7 + audioBoost * 0.9;
+    if (glowStrength > 0.05) {
+      ctx.globalCompositeOperation = 'lighter';
+      for (let i = 0; i < drawList.length; i++) {
+        const d = drawList[i];
+        const edgeFade = d.depth > 0.85 ? Math.max(0, 1 - (d.depth - 0.85) / 0.15) : 1;
+        const alpha = d.brightness * edgeFade * glowStrength * 0.45;
+        if (alpha < 0.02) continue;
+        const baseLineW = 0.5 + d.depth * (1.5 + speed * 1.2 + scale * 0.6);
+        const glowW = baseLineW * (3.5 + d.depth * 2.5);
+        const h360 = ((hNorm + d.hueOffset + 1) % 1) * 360;
+        const sat = isMono ? 0 : 0.4 + (1 - d.depth) * 0.3;
+        const lightness = 60 + d.depth * 25;
+        ctx.strokeStyle = `hsla(${h360}, ${Math.round(sat * 100)}%, ${Math.min(95, lightness)}%, ${alpha})`;
+        ctx.lineWidth = glowW;
+        ctx.beginPath();
+        ctx.moveTo(d.x1, d.y1);
+        ctx.lineTo(d.x2, d.y2);
+        ctx.stroke();
+      }
+      ctx.globalCompositeOperation = 'source-over';
+    }
+
+    // Core streak pass — bright thin lines
+    for (let i = 0; i < drawList.length; i++) {
+      const d = drawList[i];
+      const edgeFade = d.depth > 0.85 ? Math.max(0, 1 - (d.depth - 0.85) / 0.15) : 1;
+      const alpha = d.brightness * edgeFade;
+      const lineWidth = 0.5 + d.depth * (1.5 + speed * 1.2 + scale * 0.6);
+      const h360 = ((hNorm + d.hueOffset + 1) % 1) * 360;
+      const sat = isMono ? 0 : 0.15 + (1 - d.depth) * 0.25;
+      const lightness = 70 + d.depth * 25;
+      ctx.strokeStyle = `hsla(${h360}, ${Math.round(sat * 100)}%, ${Math.min(98, lightness)}%, ${alpha})`;
+      ctx.lineWidth = lineWidth;
+      ctx.beginPath();
+      ctx.moveTo(d.x1, d.y1);
+      ctx.lineTo(d.x2, d.y2);
+      ctx.stroke();
+    }
+
+    // Subtle central glow at the vanishing point (more pronounced with audio)
+    const coreR = 6 + audioBoost * 30;
+    if (coreR > 4) {
+      const [r, g, b] = hslToRgb(hNorm, isMono ? 0 : 0.4, 0.85);
+      const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, coreR);
+      grad.addColorStop(0, `rgba(${r},${g},${b},${(0.18 + audioBoost * 0.5) * opacity})`);
+      grad.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.shadowBlur = 0;
+      ctx.fillStyle = grad;
+      ctx.fillRect(cx - coreR, cy - coreR, coreR * 2, coreR * 2);
+    }
+
+    ctx.shadowBlur = 0;
+    ctx.globalAlpha = 1;
+  }
+
   _renderLayer(layer, lCanvas, time, audioLevel) {
     const lCtx = lCanvas.getContext('2d');
     const bw = lCanvas.width, bh = lCanvas.height;
@@ -1202,6 +1377,7 @@ export class LiquidShowVisualizer {
       case 'scope': this._renderScope(layer, lCtx, bw, bh, time, audioLevel); break;
       case 'pulse': this._renderPulse(layer, lCtx, bw, bh, time, audioLevel); break;
       case 'lissajous': this._renderLissajous(layer, lCtx, bw, bh, time, audioLevel); break;
+      case 'stars': this._renderStars(layer, lCtx, bw, bh, time, audioLevel); break;
     }
 
     // Apply per-layer post effects
@@ -1913,6 +2089,8 @@ export class LiquidShowVisualizer {
         layer._imgPixels = null;
         layer._pulseRings = null;
         layer._lastPulseTime = null;
+        layer._stars = null;
+        layer._lastStarsTime = undefined;
         this._rebuildLayerList();
         this._rebuildLayerKnobs();
         this._pushHistory();
