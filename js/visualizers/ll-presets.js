@@ -1638,5 +1638,104 @@ export const LL_PRESETS = [
       "dynamicEnabled": false,
       "globalLock": false
     }
+  },
+  {
+    "id": "london-tube",
+    "name": "London Tube",
+    "description": "Two counter-rotating multicolor star fields — one forward, one backward",
+    "vizState": {
+      "layers": [
+        {
+          "type": "stars",
+          "visible": true,
+          "locked": false,
+          "params": {
+            "scale": 1.7,
+            "speed": 0.4,
+            "opacity": 1,
+            "drift": 0.35,
+            "rotation": 0.5,
+            "zoom": 1,
+            "mirror": 0,
+            "turbulence": 0,
+            "distortion": 0.8,
+            "fade": 0.35,
+            "tint": 0,
+            "invert": 0,
+            "brightness": 0.3,
+            "reactivity": 0.1
+          },
+          "blendMode": "lighter",
+          "audioSource": "full",
+          "audioSync": true,
+          "colorMode": "color",
+          "hue": 365,
+          "offset": { "x": 445.88313218292774, "y": 514.1203145354134 },
+          "starsRotSpeed": 2.7,
+          "starsRotDir": "cw",
+          "starsThickness": 1,
+          "starsOriginRadius": 0,
+          "starsFlowDir": "forward",
+          "starsParticleShape": "streak",
+          "starsSize": 2.7,
+          "starsTailLength": 0.8
+        },
+        {
+          "type": "stars",
+          "visible": true,
+          "locked": false,
+          "params": {
+            "scale": 1.7,
+            "speed": 0.4,
+            "opacity": 1,
+            "drift": 0.35,
+            "rotation": 0.5,
+            "zoom": 1,
+            "mirror": 0,
+            "turbulence": 0,
+            "distortion": 0.8,
+            "fade": 0.35,
+            "tint": 0,
+            "invert": 0,
+            "brightness": 0.3,
+            "reactivity": 0.1
+          },
+          "blendMode": "difference",
+          "audioSource": "full",
+          "audioSync": true,
+          "colorMode": "color",
+          "hue": 365,
+          "offset": { "x": 230.87714983846232, "y": 333.7470276199027 },
+          "starsRotSpeed": 2.6,
+          "starsRotDir": "ccw",
+          "starsThickness": 1,
+          "starsOriginRadius": 0,
+          "starsFlowDir": "backward",
+          "starsParticleShape": "streak",
+          "starsSize": 5,
+          "starsTailLength": 5
+        }
+      ],
+      "selectedLayerIndex": 1,
+      "soloLayerIndex": -1,
+      "globals": {
+        "audioGain": 1.6,
+        "speed": 0.8,
+        "turbulence": 0.9,
+        "bloom": 0.65,
+        "softness": 0.75,
+        "contrast": 1,
+        "saturation": 0.7,
+        "interaction": 0.25,
+        "journey": 0.8,
+        "grain": 0.5,
+        "bw": false,
+        "threshold": 0.5,
+        "density": 0.5,
+        "bwGlow": 0.5
+      },
+      "dynamicEnabled": false,
+      "globalLock": false
+    }
   }
 ];
