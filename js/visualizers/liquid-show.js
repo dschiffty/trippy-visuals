@@ -1625,11 +1625,13 @@ export class LiquidShowVisualizer {
     if (audioActive) {
       // --- Audio sensitivity mode ---
       // Frequency = threshold lever: how loud audio needs to be to trigger a strike.
-      // freq=0 → only fires on very loud hits (threshold ≈ 0.65)
+      // freq=0 → only fires on very loud hits (threshold ≈ 1.0)
+      // freq=0.5 → moderate (threshold ≈ 0.27)
       // freq=1 → fires on almost any audio (threshold ≈ 0.03)
-      const threshold = 0.03 + Math.pow(1 - freq, 1.8) * 0.62;
-      // Minimum gap between strikes: shorter at high freq
-      const cooldown = 0.06 + (1 - freq) * 0.28;
+      const threshold = 0.03 + Math.pow(1 - freq, 2.0) * 0.97;
+      // Minimum gap between strikes: much longer at low freq so even qualifying hits are sparse
+      // freq=0 → ~1.6 s minimum, freq=0.5 → ~0.5 s, freq=1 → ~0.06 s
+      const cooldown = 0.06 + Math.pow(1 - freq, 1.6) * 1.54;
       if (audioBoost > threshold && time - layer._lightLastBeatTime > cooldown && layer._strikes.length < 14) {
         layer._lightLastBeatTime = time;
         layer._lightNextTime = time + cooldown; // keep timer synced
