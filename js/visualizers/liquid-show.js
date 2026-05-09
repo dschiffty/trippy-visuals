@@ -1924,17 +1924,24 @@ export class LiquidShowVisualizer {
         layer._spinAngle += spinSpeed * spinDt * (Math.PI / 6) * (spinDir === 'cw' ? 1 : -1);
       }
       if (layer._spinAngle !== 0) {
-        // Copy current output to a tmp canvas, clear, then redraw rotated
+        // Copy current output to a tmp canvas, clear, then redraw rotated + over-scaled.
+        // Scale by diagonal/min(w,h) so content always covers the full canvas at any
+        // rotation angle — the rotated rectangle's nearest edge always extends past every
+        // viewport edge, leaving no exposed transparent corners.
+        // (For a square this equals √2; for 16:9 it is ≈2.04; √2 alone is not enough for
+        // non-square canvases.)
         if (!this._spinTmpCanvas) this._spinTmpCanvas = document.createElement('canvas');
         const stc = this._spinTmpCanvas;
         if (stc.width !== bw || stc.height !== bh) { stc.width = bw; stc.height = bh; }
         const stCtx = stc.getContext('2d');
         stCtx.clearRect(0, 0, bw, bh);
         stCtx.drawImage(lCanvas, 0, 0);
+        const spinScale = Math.hypot(bw, bh) / Math.min(bw, bh);
         lCtx.clearRect(0, 0, bw, bh);
         lCtx.save();
         lCtx.translate(bw / 2, bh / 2);
         lCtx.rotate(layer._spinAngle);
+        lCtx.scale(spinScale, spinScale);
         lCtx.translate(-bw / 2, -bh / 2);
         lCtx.drawImage(stc, 0, 0);
         lCtx.restore();
