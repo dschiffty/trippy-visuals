@@ -323,6 +323,7 @@ export class LiquidShowVisualizer {
         starsParticleShape: l.type === 'stars' ? (l._starsParticleShape ?? 'streak') : undefined,
         starsSize: l.type === 'stars' ? (l._starsSize ?? 1.0) : undefined,
         starsTailLength: l.type === 'stars' ? (l._starsTailLength ?? 1.0) : undefined,
+        starsHyperspace: l.type === 'stars' ? (l._hyperspace ?? false) : undefined,
         lightFreq:      l.type === 'lightning' ? (l._lightFreq      ?? 0.4) : undefined,
         lightIntensity: l.type === 'lightning' ? (l._lightIntensity ?? 0.6) : undefined,
         lightBranching: l.type === 'lightning' ? (l._lightBranching ?? 0.5) : undefined,
@@ -386,6 +387,7 @@ export class LiquidShowVisualizer {
           if (saved.starsParticleShape !== undefined) layer._starsParticleShape = saved.starsParticleShape;
           if (saved.starsSize !== undefined) layer._starsSize = saved.starsSize;
           if (saved.starsTailLength !== undefined) layer._starsTailLength = saved.starsTailLength;
+          if (saved.starsHyperspace !== undefined) layer._hyperspace = saved.starsHyperspace;
         }
         // Restore lightning params
         if (saved.type === 'lightning') {
@@ -2459,6 +2461,7 @@ export class LiquidShowVisualizer {
         starsParticleShape: l.type === 'stars' ? (l._starsParticleShape ?? 'streak') : undefined,
         starsSize: l.type === 'stars' ? (l._starsSize ?? 1.0) : undefined,
         starsTailLength: l.type === 'stars' ? (l._starsTailLength ?? 1.0) : undefined,
+        starsHyperspace: l.type === 'stars' ? (l._hyperspace ?? false) : undefined,
         lightFreq:      l.type === 'lightning' ? (l._lightFreq      ?? 0.4) : undefined,
         lightIntensity: l.type === 'lightning' ? (l._lightIntensity ?? 0.6) : undefined,
         lightBranching: l.type === 'lightning' ? (l._lightBranching ?? 0.5) : undefined,
@@ -2541,6 +2544,7 @@ export class LiquidShowVisualizer {
         if (saved.starsParticleShape !== undefined) layer._starsParticleShape = saved.starsParticleShape;
         if (saved.starsSize !== undefined) layer._starsSize = saved.starsSize;
         if (saved.starsTailLength !== undefined) layer._starsTailLength = saved.starsTailLength;
+        if (saved.starsHyperspace !== undefined) layer._hyperspace = saved.starsHyperspace;
       }
       if (saved.type === 'lightning') {
         if (saved.lightFreq !== undefined)      layer._lightFreq      = saved.lightFreq;
@@ -3124,6 +3128,95 @@ export class LiquidShowVisualizer {
     if (layer.type === 'stars' && !isMulti) {
       const starsLabelCss = 'font-size:9px;font-weight:bold;color:#000;white-space:nowrap;';
 
+      // --- Hyperspace button ---
+      const hsRow = document.createElement('div');
+      hsRow.className = 'll-image-row';
+      hsRow.style.cssText = 'margin-bottom:6px;';
+      const hsBtn = document.createElement('button');
+      const hsActive = !!layer._hyperspace;
+      hsBtn.className = 'll-toggle' + (hsActive ? ' active' : '');
+      hsBtn.textContent = '⚡ Hyperspace';
+      hsBtn.title = 'Warp layer and environment to hyperspace preset. Toggle off to restore.';
+      hsBtn.style.cssText = 'width:100%;padding:5px 8px;font-size:10px;font-weight:bold;letter-spacing:0.5px;';
+      hsBtn.addEventListener('click', () => {
+        if (this._isLayerLocked(this.selectedLayerIndex)) return;
+        if (!layer._hyperspace) {
+          // ── Activate ──
+          layer._hyperspaceSnapshot = {
+            params: { ...layer.params },
+            starsThickness:     layer._starsThickness     ?? 1.0,
+            starsOriginRadius:  layer._starsOriginRadius  ?? 0,
+            starsFlowDir:       layer._starsFlowDir       ?? 'forward',
+            starsParticleShape: layer._starsParticleShape ?? 'streak',
+            starsSize:          layer._starsSize          ?? 1.0,
+            starsTailLength:    layer._starsTailLength     ?? 1.0,
+            hue:       layer.hue,
+            blendMode: layer.blendMode,
+          };
+          layer._hyperspaceGlobalSnapshot = {
+            speed:      this.globals.speed,
+            bloom:      this.globals.bloom,
+            softness:   this.globals.softness,
+            saturation: this.globals.saturation,
+          };
+          // Apply hyperspace layer values
+          layer.params.speed       = 2.0;
+          layer.params.turbulence  = 0.45;
+          layer.params.distortion  = 0.5;
+          layer.params.brightness  = 0.5;
+          layer.params.reactivity  = 0;
+          layer._starsThickness     = 1.0;
+          layer._starsOriginRadius  = 0;
+          layer._starsFlowDir       = 'forward';
+          layer._starsParticleShape = 'streak';
+          layer._starsSize          = 1.1;
+          layer._starsTailLength    = 0.7;
+          layer._stars              = null; // respawn with new shape/dir
+          if (layer.hue <= 360) layer._savedHue = layer.hue;
+          layer.hue       = 365; // multicolor
+          layer.blendMode = 'lighter';
+          layer._hyperspace = true;
+          // Apply hyperspace global values
+          this.globals.speed      = 2.0;
+          this.globals.bloom      = 0.55;
+          this.globals.softness   = 0.5;
+          this.globals.saturation = 0.95;
+        } else {
+          // ── Deactivate ──
+          if (layer._hyperspaceSnapshot) {
+            Object.assign(layer.params, layer._hyperspaceSnapshot.params);
+            layer._starsThickness     = layer._hyperspaceSnapshot.starsThickness;
+            layer._starsOriginRadius  = layer._hyperspaceSnapshot.starsOriginRadius;
+            layer._starsFlowDir       = layer._hyperspaceSnapshot.starsFlowDir;
+            layer._starsParticleShape = layer._hyperspaceSnapshot.starsParticleShape;
+            layer._starsSize          = layer._hyperspaceSnapshot.starsSize;
+            layer._starsTailLength    = layer._hyperspaceSnapshot.starsTailLength;
+            layer.hue       = layer._hyperspaceSnapshot.hue;
+            layer.blendMode = layer._hyperspaceSnapshot.blendMode;
+            layer._stars    = null; // respawn with restored shape/dir
+            layer._hyperspaceSnapshot = null;
+          }
+          if (layer._hyperspaceGlobalSnapshot) {
+            this.globals.speed      = layer._hyperspaceGlobalSnapshot.speed;
+            this.globals.bloom      = layer._hyperspaceGlobalSnapshot.bloom;
+            this.globals.softness   = layer._hyperspaceGlobalSnapshot.softness;
+            this.globals.saturation = layer._hyperspaceGlobalSnapshot.saturation;
+            layer._hyperspaceGlobalSnapshot = null;
+          }
+          layer._hyperspace = false;
+        }
+        // Rebuild layer panel to reflect all new values
+        this._rebuildLayerKnobs();
+        // Sync global knob displays
+        this._globalKnobs.forEach(k => {
+          const val = this.globals[k.param.key];
+          if (val !== undefined) { k.value = val; k.baseValue = val; k.updateVisual(); }
+        });
+        this._pushHistory();
+      });
+      hsRow.appendChild(hsBtn);
+      container.appendChild(hsRow);
+
       // --- Spin speed (max raised to 6, 3× previous ceiling) ---
       const rotRow = document.createElement('div');
       rotRow.className = 'll-image-row';
@@ -3626,6 +3719,9 @@ export class LiquidShowVisualizer {
           tgt._starsSize          = 1.0;
           tgt._starsTailLength    = 1.0;
           tgt._stars              = null;
+          tgt._hyperspace         = false;
+          tgt._hyperspaceSnapshot = null;
+          tgt._hyperspaceGlobalSnapshot = null;
           // If multicolor was active, restore a normal hue
           if (tgt.hue > 360) tgt.hue = tgt._savedHue ?? 180;
         }
