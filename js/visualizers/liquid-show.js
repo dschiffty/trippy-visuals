@@ -80,6 +80,8 @@ function hslToRgb(h, s, l) {
 // --- Layer Type Constants ---
 const LAYER_TYPES = ['wash', 'blob', 'marbling', 'bubble', 'image', 'scope', 'pulse', 'lissajous', 'stars', 'lightning'];
 const LAYER_TYPE_LABELS = { wash: 'Wash', blob: 'Blob', marbling: 'Marbling', bubble: 'Bubble', image: 'Image', scope: 'Scope', pulse: 'Pulse', lissajous: 'Lissajous', stars: 'Stars', lightning: 'Lightning' };
+// Layer types that support the canvas-level spin rotation controls
+const SPIN_LAYER_TYPES = new Set(['wash', 'bubble', 'pulse', 'image', 'lissajous', 'lightning']);
 const BLEND_MODES = [
   { value: 'source-over', label: 'Normal' },
   { value: 'lighter', label: 'Add' },
@@ -322,6 +324,8 @@ export class LiquidShowVisualizer {
         lightIntensity: l.type === 'lightning' ? (l._lightIntensity ?? 0.6) : undefined,
         lightBranching: l.type === 'lightning' ? (l._lightBranching ?? 0.5) : undefined,
         lightDuration:  l.type === 'lightning' ? (l._lightDuration  ?? 0.4) : undefined,
+        spinSpeed: SPIN_LAYER_TYPES.has(l.type) ? (l._spinSpeed ?? 0) : undefined,
+        spinDir:   SPIN_LAYER_TYPES.has(l.type) ? (l._spinDir   ?? 'cw') : undefined,
       })),
       selectedLayerIndex: this.selectedLayerIndex,
       soloLayerIndex: this.soloLayerIndex,
@@ -384,6 +388,11 @@ export class LiquidShowVisualizer {
           if (saved.lightIntensity !== undefined) layer._lightIntensity = saved.lightIntensity;
           if (saved.lightBranching !== undefined) layer._lightBranching = saved.lightBranching;
           if (saved.lightDuration !== undefined)  layer._lightDuration  = saved.lightDuration;
+        }
+        // Restore spin params
+        if (SPIN_LAYER_TYPES.has(saved.type)) {
+          if (saved.spinSpeed !== undefined) layer._spinSpeed = saved.spinSpeed;
+          if (saved.spinDir   !== undefined) layer._spinDir   = saved.spinDir;
         }
         return layer;
       });
@@ -1902,6 +1911,35 @@ export class LiquidShowVisualizer {
       lCtx.globalAlpha = 1;
       lCtx.globalCompositeOperation = 'source-over';
     }
+
+    // Spin rotation — canvas-level post-render rotation around the layer centre
+    if (SPIN_LAYER_TYPES.has(layer.type)) {
+      const spinSpeed = layer._spinSpeed ?? 0;
+      if (layer._spinAngle === undefined) layer._spinAngle = 0;
+      if (layer._lastSpinTime === undefined) layer._lastSpinTime = time;
+      const spinDt = Math.min(0.1, time - layer._lastSpinTime);
+      layer._lastSpinTime = time;
+      if (spinSpeed > 0) {
+        const spinDir = layer._spinDir ?? 'cw';
+        layer._spinAngle += spinSpeed * spinDt * (Math.PI / 6) * (spinDir === 'cw' ? 1 : -1);
+      }
+      if (layer._spinAngle !== 0) {
+        // Copy current output to a tmp canvas, clear, then redraw rotated
+        if (!this._spinTmpCanvas) this._spinTmpCanvas = document.createElement('canvas');
+        const stc = this._spinTmpCanvas;
+        if (stc.width !== bw || stc.height !== bh) { stc.width = bw; stc.height = bh; }
+        const stCtx = stc.getContext('2d');
+        stCtx.clearRect(0, 0, bw, bh);
+        stCtx.drawImage(lCanvas, 0, 0);
+        lCtx.clearRect(0, 0, bw, bh);
+        lCtx.save();
+        lCtx.translate(bw / 2, bh / 2);
+        lCtx.rotate(layer._spinAngle);
+        lCtx.translate(-bw / 2, -bh / 2);
+        lCtx.drawImage(stc, 0, 0);
+        lCtx.restore();
+      }
+    }
   }
 
   // --- Journey Mode ---
@@ -2386,6 +2424,8 @@ export class LiquidShowVisualizer {
         lightIntensity: l.type === 'lightning' ? (l._lightIntensity ?? 0.6) : undefined,
         lightBranching: l.type === 'lightning' ? (l._lightBranching ?? 0.5) : undefined,
         lightDuration:  l.type === 'lightning' ? (l._lightDuration  ?? 0.4) : undefined,
+        spinSpeed: SPIN_LAYER_TYPES.has(l.type) ? (l._spinSpeed ?? 0) : undefined,
+        spinDir:   SPIN_LAYER_TYPES.has(l.type) ? (l._spinDir   ?? 'cw') : undefined,
       })),
       selectedLayerIndex: this.selectedLayerIndex,
       selectedLayerIndices: [...this.selectedLayerIndices],
@@ -2466,6 +2506,10 @@ export class LiquidShowVisualizer {
         if (saved.lightIntensity !== undefined) layer._lightIntensity = saved.lightIntensity;
         if (saved.lightBranching !== undefined) layer._lightBranching = saved.lightBranching;
         if (saved.lightDuration !== undefined)  layer._lightDuration  = saved.lightDuration;
+      }
+      if (SPIN_LAYER_TYPES.has(saved.type)) {
+        if (saved.spinSpeed !== undefined) layer._spinSpeed = saved.spinSpeed;
+        if (saved.spinDir   !== undefined) layer._spinDir   = saved.spinDir;
       }
       return layer;
     });
@@ -3271,6 +3315,63 @@ export class LiquidShowVisualizer {
       });
       colorRow.appendChild(multiBtn);
       container.appendChild(colorRow);
+    }
+
+    // --- Spin controls (shared: wash, bubble, pulse, image, lissajous, lightning) ---
+    if (SPIN_LAYER_TYPES.has(layer.type) && !isMulti) {
+      const spinLabelCss = 'font-size:9px;font-weight:bold;color:#000;white-space:nowrap;';
+
+      // Spin Speed slider
+      const spinSpeedRow = document.createElement('div');
+      spinSpeedRow.className = 'll-image-row';
+      spinSpeedRow.style.gap = '6px';
+      const spinSpeedLabel = document.createElement('span');
+      spinSpeedLabel.style.cssText = spinLabelCss;
+      spinSpeedLabel.textContent = 'Spin Speed:';
+      spinSpeedRow.appendChild(spinSpeedLabel);
+      const spinSpeedSlider = document.createElement('input');
+      spinSpeedSlider.type = 'range';
+      spinSpeedSlider.className = 'll-row-slider';
+      spinSpeedSlider.min = '0'; spinSpeedSlider.max = '10'; spinSpeedSlider.step = '0.1';
+      spinSpeedSlider.value = String(layer._spinSpeed ?? 0);
+      const spinSpeedVal = document.createElement('span');
+      spinSpeedVal.style.cssText = 'font-size:10px;color:#aaa;min-width:28px;text-align:right;';
+      spinSpeedVal.textContent = Number(spinSpeedSlider.value).toFixed(1);
+      spinSpeedSlider.addEventListener('input', () => {
+        if (this._isLayerLocked(this.selectedLayerIndex)) return;
+        layer._spinSpeed = parseFloat(spinSpeedSlider.value);
+        spinSpeedVal.textContent = layer._spinSpeed.toFixed(1);
+        this._pushHistory();
+      });
+      spinSpeedRow.appendChild(spinSpeedSlider);
+      spinSpeedRow.appendChild(spinSpeedVal);
+      container.appendChild(spinSpeedRow);
+
+      // Direction toggle: Clockwise / Counter-Clockwise
+      const spinDirRow = document.createElement('div');
+      spinDirRow.className = 'll-image-row';
+      spinDirRow.style.cssText = 'gap:4px;flex-wrap:wrap;';
+      const spinDirLabel = document.createElement('span');
+      spinDirLabel.style.cssText = spinLabelCss + 'margin-right:2px;';
+      spinDirLabel.textContent = 'Direction:';
+      spinDirRow.appendChild(spinDirLabel);
+      const currentSpinDir = layer._spinDir ?? 'cw';
+      [['cw', '↻ Clockwise'], ['ccw', '↺ Counter-Clockwise']].forEach(([dir, text]) => {
+        const btn = document.createElement('button');
+        btn.className = 'll-toggle' + (currentSpinDir === dir ? ' active' : '');
+        btn.textContent = text;
+        btn.dataset.spinDir = dir;
+        btn.style.cssText = 'padding:2px 5px;font-size:9px;';
+        btn.addEventListener('click', () => {
+          if (this._isLayerLocked(this.selectedLayerIndex)) return;
+          layer._spinDir = dir;
+          spinDirRow.querySelectorAll('[data-spin-dir]').forEach(b => b.classList.remove('active'));
+          btn.classList.add('active');
+          this._pushHistory();
+        });
+        spinDirRow.appendChild(btn);
+      });
+      container.appendChild(spinDirRow);
     }
 
     // Toolbar: Randomize + Randomize All + Dynamic
