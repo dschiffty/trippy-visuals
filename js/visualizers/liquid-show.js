@@ -78,8 +78,8 @@ function hslToRgb(h, s, l) {
 }
 
 // --- Layer Type Constants ---
-const LAYER_TYPES = ['wash', 'blob', 'marbling', 'bubble', 'image', 'scope', 'pulse', 'lissajous', 'stars'];
-const LAYER_TYPE_LABELS = { wash: 'Wash', blob: 'Blob', marbling: 'Marbling', bubble: 'Bubble', image: 'Image', scope: 'Scope', pulse: 'Pulse', lissajous: 'Lissajous', stars: 'Stars' };
+const LAYER_TYPES = ['wash', 'blob', 'marbling', 'bubble', 'image', 'scope', 'pulse', 'lissajous', 'stars', 'lightning'];
+const LAYER_TYPE_LABELS = { wash: 'Wash', blob: 'Blob', marbling: 'Marbling', bubble: 'Bubble', image: 'Image', scope: 'Scope', pulse: 'Pulse', lissajous: 'Lissajous', stars: 'Stars', lightning: 'Lightning' };
 const BLEND_MODES = [
   { value: 'source-over', label: 'Normal' },
   { value: 'lighter', label: 'Add' },
@@ -89,7 +89,7 @@ const BLEND_MODES = [
   { value: 'difference', label: 'Difference' },
 ];
 const AUDIO_SOURCES = ['none', 'bass', 'mids', 'highs', 'full'];
-const LAYER_SCALES = { wash: 8, blob: 6, marbling: 7, bubble: 7, image: 4, scope: 1, pulse: 1, lissajous: 1, stars: 1 };
+const LAYER_SCALES = { wash: 8, blob: 6, marbling: 7, bubble: 7, image: 4, scope: 1, pulse: 1, lissajous: 1, stars: 1, lightning: 1 };
 
 // --- Lissajous Shape Definitions (from lissajous.js) ---
 const LISSAJOUS_SHAPES = [
@@ -315,6 +315,10 @@ export class LiquidShowVisualizer {
         starsOriginRadius: l.type === 'stars' ? (l._starsOriginRadius ?? 0) : undefined,
         starsFlowDir: l.type === 'stars' ? (l._starsFlowDir ?? 'forward') : undefined,
         starsParticleShape: l.type === 'stars' ? (l._starsParticleShape ?? 'streak') : undefined,
+        lightFreq:      l.type === 'lightning' ? (l._lightFreq      ?? 0.4) : undefined,
+        lightIntensity: l.type === 'lightning' ? (l._lightIntensity ?? 0.6) : undefined,
+        lightBranching: l.type === 'lightning' ? (l._lightBranching ?? 0.5) : undefined,
+        lightDuration:  l.type === 'lightning' ? (l._lightDuration  ?? 0.4) : undefined,
       })),
       selectedLayerIndex: this.selectedLayerIndex,
       soloLayerIndex: this.soloLayerIndex,
@@ -365,6 +369,13 @@ export class LiquidShowVisualizer {
           if (saved.starsOriginRadius !== undefined) layer._starsOriginRadius = saved.starsOriginRadius;
           if (saved.starsFlowDir !== undefined) layer._starsFlowDir = saved.starsFlowDir;
           if (saved.starsParticleShape !== undefined) layer._starsParticleShape = saved.starsParticleShape;
+        }
+        // Restore lightning params
+        if (saved.type === 'lightning') {
+          if (saved.lightFreq !== undefined)      layer._lightFreq      = saved.lightFreq;
+          if (saved.lightIntensity !== undefined) layer._lightIntensity = saved.lightIntensity;
+          if (saved.lightBranching !== undefined) layer._lightBranching = saved.lightBranching;
+          if (saved.lightDuration !== undefined)  layer._lightDuration  = saved.lightDuration;
         }
         return layer;
       });
@@ -1478,6 +1489,234 @@ export class LiquidShowVisualizer {
     ctx.globalAlpha = 1;
   }
 
+  // ============================================================
+  // Lightning layer
+  // ============================================================
+
+  /**
+   * Recursively subdivide a segment into a jagged path with optional
+   * branching offshoots. Returns the main path; branches are pushed
+   * into the `branches` array.
+   */
+  _genLightningPath(x1, y1, x2, y2, jitter, depth, maxDepth, branchProb, branches, maxBranches) {
+    if (depth >= maxDepth) return [{ x: x1, y: y1 }, { x: x2, y: y2 }];
+    const dx = x2 - x1, dy = y2 - y1;
+    const len = Math.hypot(dx, dy) || 1;
+    // Perpendicular unit vector
+    const px = -dy / len, py = dx / len;
+    // Jittered midpoint
+    const off = (Math.random() - 0.5) * jitter;
+    const mx = (x1 + x2) / 2 + px * off;
+    const my = (y1 + y2) / 2 + py * off;
+
+    // Possibly spawn a branch from the midpoint (deeper levels only — keeps tree readable)
+    if (depth >= 2 && branches.length < maxBranches && Math.random() < branchProb) {
+      const baseAngle = Math.atan2(dy, dx);
+      const branchAngle = baseAngle + (Math.random() < 0.5 ? -1 : 1) * (0.4 + Math.random() * 0.9);
+      const branchLen = len * (0.35 + Math.random() * 0.4);
+      const bx = mx + Math.cos(branchAngle) * branchLen;
+      const by = my + Math.sin(branchAngle) * branchLen;
+      const bPath = this._genLightningPath(mx, my, bx, by, jitter * 0.55, depth + 1, maxDepth - 1, branchProb * 0.5, branches, maxBranches);
+      branches.push(bPath);
+    }
+
+    const left = this._genLightningPath(x1, y1, mx, my, jitter * 0.55, depth + 1, maxDepth, branchProb, branches, maxBranches);
+    const right = this._genLightningPath(mx, my, x2, y2, jitter * 0.55, depth + 1, maxDepth, branchProb, branches, maxBranches);
+    return left.concat(right.slice(1));
+  }
+
+  /**
+   * Build a single lightning strike with main bolt + branches.
+   * Two strike types:
+   *   'arc'    — full-screen, edge-to-edge or corner-to-corner
+   *   'local'  — short, concentrated bolt at a random spot
+   */
+  _spawnLightningStrike(layer, w, h, time, intensity, branching, audioBoost) {
+    const isArc = Math.random() < 0.55;
+    let x1, y1, x2, y2, baseLen;
+
+    if (isArc) {
+      // Pick two points on different edges of the canvas
+      const pickEdgePoint = () => {
+        const side = Math.floor(Math.random() * 4);
+        if (side === 0) return [Math.random() * w, -h * 0.05];           // top
+        if (side === 1) return [w * 1.05, Math.random() * h];            // right
+        if (side === 2) return [Math.random() * w, h * 1.05];            // bottom
+        return [-w * 0.05, Math.random() * h];                            // left
+      };
+      let [ax, ay] = pickEdgePoint();
+      let [bx, by] = pickEdgePoint();
+      // If both ended up on the same side, force opposite
+      if (Math.hypot(bx - ax, by - ay) < Math.min(w, h) * 0.5) {
+        bx = w - ax; by = h - ay;
+      }
+      x1 = ax; y1 = ay; x2 = bx; y2 = by;
+      baseLen = Math.hypot(x2 - x1, y2 - y1);
+    } else {
+      // Local strike — a shorter bolt at a random position with random direction
+      const cx = w * (0.15 + Math.random() * 0.7);
+      const cy = h * (0.15 + Math.random() * 0.7);
+      const localLen = Math.min(w, h) * (0.18 + Math.random() * 0.32) * (0.6 + intensity * 0.9);
+      const angle = Math.random() * Math.PI * 2;
+      x1 = cx - Math.cos(angle) * localLen * 0.5;
+      y1 = cy - Math.sin(angle) * localLen * 0.5;
+      x2 = cx + Math.cos(angle) * localLen * 0.5;
+      y2 = cy + Math.sin(angle) * localLen * 0.5;
+      baseLen = localLen;
+    }
+
+    const jitter = baseLen * (0.08 + branching * 0.1);
+    const maxDepth = isArc ? 7 : 6;
+    const branches = [];
+    const maxBranches = Math.floor(2 + branching * 14);
+    const branchProb = 0.18 + branching * 0.6;
+    const main = this._genLightningPath(x1, y1, x2, y2, jitter, 0, maxDepth, branchProb, branches, maxBranches);
+
+    // Pick color — multi-color sentinel (>360) randomizes per strike
+    const isMulti = layer.hue > 360;
+    const strikeHue = isMulti ? Math.random() * 360 : layer.hue;
+
+    return {
+      type: isArc ? 'arc' : 'local',
+      main, branches,
+      born: time,
+      duration: layer._lightStrikeDuration,
+      intensity: intensity * (0.85 + Math.random() * 0.3) * (1 + audioBoost * 0.6),
+      hue: strikeHue,
+      // Flash bloom anchor — brightest near the middle of the bolt
+      flashX: (x1 + x2) * 0.5,
+      flashY: (y1 + y2) * 0.5,
+      flashR: baseLen * (isArc ? 0.35 : 0.55),
+    };
+  }
+
+  _renderLightning(layer, ctx, w, h, time, audioLevel) {
+    const { opacity, distortion, reactivity, scale } = layer.params;
+    const isMono = layer.colorMode === 'mono';
+
+    // Lightning-specific params (with defaults)
+    const freq        = layer._lightFreq       ?? 0.4;
+    const intensity   = layer._lightIntensity  ?? 0.6;
+    const branching   = layer._lightBranching  ?? 0.5;
+    const durationP   = layer._lightDuration   ?? 0.4;
+
+    // 0..1 → real seconds, sharp flash + glow tail
+    const strikeDuration = 0.08 + durationP * 1.2;
+    layer._lightStrikeDuration = strikeDuration;
+
+    // Audio-reactive boost on top of baseline frequency
+    const audioBoost = audioLevel * reactivity;
+
+    // Persistence / decay (background fade-out)
+    const decay = distortion;
+    if (decay > 0.01) {
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.fillStyle = `rgba(0, 0, 0, ${1 - decay * 0.92})`;
+      ctx.fillRect(0, 0, w, h);
+    } else {
+      ctx.clearRect(0, 0, w, h);
+    }
+
+    // Per-layer state
+    if (!layer._strikes) layer._strikes = [];
+    if (layer._lightNextTime === undefined) layer._lightNextTime = time + 0.05;
+    if (layer._lightLastBeatTime === undefined) layer._lightLastBeatTime = 0;
+
+    // Baseline interval: freq=0 → ~5s rare, freq=1 → ~0.05s frequent. Audio shrinks it further.
+    const baseInt = 0.05 + Math.pow(1 - freq, 2.2) * 5;
+    const interval = baseInt / (1 + audioBoost * 4);
+
+    // Schedule baseline strikes
+    let safety = 8;
+    while (time >= layer._lightNextTime && layer._strikes.length < 14 && safety-- > 0) {
+      layer._strikes.push(this._spawnLightningStrike(layer, w, h, time, intensity, branching, audioBoost));
+      // Slight randomness around the interval so strikes don't feel periodic
+      layer._lightNextTime = time + interval * (0.6 + Math.random() * 0.8);
+    }
+
+    // Bass-triggered extra strike (audio reactivity layered on top)
+    const rawBass = (layer.audioSync && layer.audioSource !== 'none') ? this.smoothBass * reactivity : 0;
+    if (rawBass > 0.18 && time - layer._lightLastBeatTime > 0.12 && layer._strikes.length < 16) {
+      layer._lightLastBeatTime = time;
+      layer._strikes.push(this._spawnLightningStrike(layer, w, h, time, intensity, branching, audioBoost * 1.4));
+    }
+
+    // Draw all live strikes
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.globalAlpha = opacity;
+
+    // Helper: stroke a path array with current style
+    const strokePath = (path) => {
+      if (path.length < 2) return;
+      ctx.beginPath();
+      ctx.moveTo(path[0].x, path[0].y);
+      for (let k = 1; k < path.length; k++) ctx.lineTo(path[k].x, path[k].y);
+      ctx.stroke();
+    };
+
+    for (let i = layer._strikes.length - 1; i >= 0; i--) {
+      const s = layer._strikes[i];
+      const age = time - s.born;
+      if (age >= s.duration) { layer._strikes.splice(i, 1); continue; }
+
+      const t = age / s.duration; // 0..1
+      // Sharp flash spike at start (first 8% of life), then exponential glow tail
+      const flashWindow = 0.08;
+      const flash = t < flashWindow ? 1 : Math.exp(-(t - flashWindow) * 5);
+      const glow = Math.exp(-t * 3.5);
+
+      const sat = isMono ? 0 : 0.55;
+      const baseLight = 70 + flash * 25;
+      const baseW = (1 + intensity * 4 + scale * 0.5) * (s.type === 'arc' ? 1 : 0.85);
+      const strikeAlpha = s.intensity;
+
+      // --- 1) Background bloom flash (lighter composite) ---
+      if (flash > 0.04) {
+        ctx.globalCompositeOperation = 'lighter';
+        const grad = ctx.createRadialGradient(s.flashX, s.flashY, 0, s.flashX, s.flashY, s.flashR);
+        const flashAlpha = Math.min(0.85, flash * strikeAlpha * 0.7);
+        grad.addColorStop(0, `hsla(${s.hue}, ${Math.round(sat * 100)}%, ${Math.round(baseLight)}%, ${flashAlpha})`);
+        grad.addColorStop(0.4, `hsla(${s.hue}, ${Math.round(sat * 100)}%, ${Math.round(baseLight - 20)}%, ${flashAlpha * 0.4})`);
+        grad.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.fillStyle = grad;
+        ctx.fillRect(s.flashX - s.flashR, s.flashY - s.flashR, s.flashR * 2, s.flashR * 2);
+      }
+
+      // --- 2) Outer glow halo on bolts (lighter composite, wide soft strokes) ---
+      ctx.globalCompositeOperation = 'lighter';
+      const haloAlpha = Math.min(0.6, (glow * 0.5 + flash * 0.4) * strikeAlpha);
+      if (haloAlpha > 0.02) {
+        ctx.strokeStyle = `hsla(${s.hue}, ${Math.round(sat * 100)}%, ${Math.round(baseLight - 5)}%, ${haloAlpha})`;
+        ctx.lineWidth = baseW * 4 + flash * 3;
+        strokePath(s.main);
+        for (let b = 0; b < s.branches.length; b++) {
+          ctx.lineWidth = baseW * 2.2 + flash * 1.5;
+          strokePath(s.branches[b]);
+        }
+      }
+
+      // --- 3) Crisp white-hot core (source-over so colour mixes brightly) ---
+      ctx.globalCompositeOperation = 'lighter';
+      const coreAlpha = Math.min(1, (flash * 0.95 + glow * 0.35) * strikeAlpha);
+      if (coreAlpha > 0.03) {
+        // Core is nearly white during flash, then fades back to hue
+        const coreLight = isMono ? Math.min(99, 80 + flash * 19) : Math.min(99, 85 + flash * 14);
+        const coreSat = isMono ? 0 : Math.max(0.05, 0.4 - flash * 0.35);
+        ctx.strokeStyle = `hsla(${s.hue}, ${Math.round(coreSat * 100)}%, ${Math.round(coreLight)}%, ${coreAlpha})`;
+        ctx.lineWidth = Math.max(1, baseW * (1 + flash * 0.5));
+        strokePath(s.main);
+        ctx.lineWidth = Math.max(0.7, baseW * 0.55);
+        for (let b = 0; b < s.branches.length; b++) {
+          strokePath(s.branches[b]);
+        }
+      }
+    }
+
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.globalAlpha = 1;
+  }
+
   _renderLayer(layer, lCanvas, time, audioLevel) {
     const lCtx = lCanvas.getContext('2d');
     const bw = lCanvas.width, bh = lCanvas.height;
@@ -1491,6 +1730,7 @@ export class LiquidShowVisualizer {
       case 'pulse': this._renderPulse(layer, lCtx, bw, bh, time, audioLevel); break;
       case 'lissajous': this._renderLissajous(layer, lCtx, bw, bh, time, audioLevel); break;
       case 'stars': this._renderStars(layer, lCtx, bw, bh, time, audioLevel); break;
+      case 'lightning': this._renderLightning(layer, lCtx, bw, bh, time, audioLevel); break;
     }
 
     // Apply per-layer post effects
@@ -2037,6 +2277,10 @@ export class LiquidShowVisualizer {
         starsOriginRadius: l.type === 'stars' ? (l._starsOriginRadius ?? 0) : undefined,
         starsFlowDir: l.type === 'stars' ? (l._starsFlowDir ?? 'forward') : undefined,
         starsParticleShape: l.type === 'stars' ? (l._starsParticleShape ?? 'streak') : undefined,
+        lightFreq:      l.type === 'lightning' ? (l._lightFreq      ?? 0.4) : undefined,
+        lightIntensity: l.type === 'lightning' ? (l._lightIntensity ?? 0.6) : undefined,
+        lightBranching: l.type === 'lightning' ? (l._lightBranching ?? 0.5) : undefined,
+        lightDuration:  l.type === 'lightning' ? (l._lightDuration  ?? 0.4) : undefined,
       })),
       selectedLayerIndex: this.selectedLayerIndex,
       selectedLayerIndices: [...this.selectedLayerIndices],
@@ -2106,6 +2350,12 @@ export class LiquidShowVisualizer {
         if (saved.starsOriginRadius !== undefined) layer._starsOriginRadius = saved.starsOriginRadius;
         if (saved.starsFlowDir !== undefined) layer._starsFlowDir = saved.starsFlowDir;
         if (saved.starsParticleShape !== undefined) layer._starsParticleShape = saved.starsParticleShape;
+      }
+      if (saved.type === 'lightning') {
+        if (saved.lightFreq !== undefined)      layer._lightFreq      = saved.lightFreq;
+        if (saved.lightIntensity !== undefined) layer._lightIntensity = saved.lightIntensity;
+        if (saved.lightBranching !== undefined) layer._lightBranching = saved.lightBranching;
+        if (saved.lightDuration !== undefined)  layer._lightDuration  = saved.lightDuration;
       }
       return layer;
     });
@@ -2221,6 +2471,9 @@ export class LiquidShowVisualizer {
         layer._starsRotAngle = undefined;
         layer._starsFlowDir = undefined;
         layer._starsParticleShape = undefined;
+        layer._strikes = null;
+        layer._lightNextTime = undefined;
+        layer._lightLastBeatTime = undefined;
         this._rebuildLayerList();
         this._rebuildLayerKnobs();
         this._pushHistory();
@@ -2746,6 +2999,80 @@ export class LiquidShowVisualizer {
       container.appendChild(shapeRow);
     }
 
+    // Lightning-specific controls (Frequency, Intensity, Branching, Duration, Multi-color)
+    if (layer.type === 'lightning' && !isMulti) {
+      const ltLabelCss = 'font-size:9px;font-weight:bold;color:#000;white-space:nowrap;';
+      const ltValCss = 'font-size:10px;color:#aaa;min-width:28px;text-align:right;';
+
+      const addSlider = (labelText, key, defaultVal, min, max, step) => {
+        const row = document.createElement('div');
+        row.className = 'll-image-row';
+        row.style.gap = '6px';
+        const lbl = document.createElement('span');
+        lbl.style.cssText = ltLabelCss;
+        lbl.textContent = labelText;
+        row.appendChild(lbl);
+        const slider = document.createElement('input');
+        slider.type = 'range';
+        slider.className = 'll-row-slider';
+        slider.min = String(min);
+        slider.max = String(max);
+        slider.step = String(step);
+        slider.value = String(layer[key] ?? defaultVal);
+        const val = document.createElement('span');
+        val.style.cssText = ltValCss;
+        val.textContent = Number(slider.value).toFixed(2);
+        slider.addEventListener('input', () => {
+          if (this._isLayerLocked(this.selectedLayerIndex)) return;
+          layer[key] = parseFloat(slider.value);
+          val.textContent = layer[key].toFixed(2);
+          this._pushHistory();
+        });
+        row.appendChild(slider);
+        row.appendChild(val);
+        container.appendChild(row);
+      };
+
+      addSlider('Frequency:', '_lightFreq',      0.4, 0, 1, 0.025);
+      addSlider('Intensity:', '_lightIntensity', 0.6, 0, 1, 0.025);
+      addSlider('Branching:', '_lightBranching', 0.5, 0, 1, 0.025);
+      addSlider('Duration:',  '_lightDuration',  0.4, 0, 1, 0.025);
+
+      // Multi-color toggle (same sentinel pattern as Lissajous: hue > 360)
+      const colorRow = document.createElement('div');
+      colorRow.className = 'll-image-row';
+      colorRow.style.gap = '6px';
+      const colorLabel = document.createElement('span');
+      colorLabel.style.cssText = ltLabelCss + 'margin-right:2px;';
+      colorLabel.textContent = 'Color:';
+      colorRow.appendChild(colorLabel);
+
+      const isMultiColor = layer.hue > 360;
+      const multiBtn = document.createElement('button');
+      multiBtn.className = 'll-toggle' + (isMultiColor ? ' active' : '');
+      multiBtn.textContent = 'Multi';
+      multiBtn.title = 'Cycle hue per strike';
+      multiBtn.style.cssText = 'min-width:44px;padding:2px 6px;font-size:10px;';
+      multiBtn.addEventListener('click', () => {
+        if (this._isLayerLocked(this.selectedLayerIndex)) return;
+        if (layer.hue > 360) {
+          layer.hue = layer._savedHue ?? 200;
+        } else {
+          layer._savedHue = layer.hue;
+          layer.hue = 365;
+        }
+        multiBtn.classList.toggle('active', layer.hue > 360);
+        const hueKnobData = this._panelKnobs.find(k => k.param.key === 'hue');
+        if (hueKnobData) {
+          hueKnobData.value = layer.hue;
+          hueKnobData.updateVisual?.(layer.hue);
+        }
+        this._pushHistory();
+      });
+      colorRow.appendChild(multiBtn);
+      container.appendChild(colorRow);
+    }
+
     // Toolbar: Randomize + Randomize All + Dynamic
     const toolbar = document.createElement('div');
     toolbar.className = 'param-toolbar ll-toolbar';
@@ -3105,6 +3432,15 @@ export class LiquidShowVisualizer {
       const _pShapes = ['streak', 'star', 'triangle', 'diamond', 'circle'];
       layer._starsParticleShape = _pShapes[Math.floor(Math.random() * _pShapes.length)];
     }
+    if (newType === 'lightning') {
+      layer._strikes = null;
+      layer._lightNextTime = undefined;
+      layer._lightLastBeatTime = undefined;
+      layer._lightFreq      = 0.2 + Math.random() * 0.7;
+      layer._lightIntensity = 0.3 + Math.random() * 0.6;
+      layer._lightBranching = Math.random();
+      layer._lightDuration  = 0.15 + Math.random() * 0.7;
+    }
     this._randomizeLayerParams(layer);
   }
 
@@ -3148,6 +3484,15 @@ export class LiquidShowVisualizer {
         layer._starsOriginRadius = Math.random() * 1.35;
         const _pShapes = ['streak', 'star', 'triangle', 'diamond', 'circle'];
         layer._starsParticleShape = _pShapes[Math.floor(Math.random() * _pShapes.length)];
+      }
+      if (newType === 'lightning') {
+        layer._strikes = null;
+        layer._lightNextTime = undefined;
+        layer._lightLastBeatTime = undefined;
+        layer._lightFreq      = 0.2 + Math.random() * 0.7;
+        layer._lightIntensity = 0.3 + Math.random() * 0.6;
+        layer._lightBranching = Math.random();
+        layer._lightDuration  = 0.15 + Math.random() * 0.7;
       }
 
       this._randomizeLayerParams(layer);
@@ -3193,6 +3538,15 @@ export class LiquidShowVisualizer {
         layer._starsOriginRadius = Math.random() * 1.35;
         const _pShapes = ['streak', 'star', 'triangle', 'diamond', 'circle'];
         layer._starsParticleShape = _pShapes[Math.floor(Math.random() * _pShapes.length)];
+      }
+      if (newType === 'lightning') {
+        layer._strikes = null;
+        layer._lightNextTime = undefined;
+        layer._lightLastBeatTime = undefined;
+        layer._lightFreq      = 0.2 + Math.random() * 0.7;
+        layer._lightIntensity = 0.3 + Math.random() * 0.6;
+        layer._lightBranching = Math.random();
+        layer._lightDuration  = 0.15 + Math.random() * 0.7;
       }
       this._randomizeLayerParams(layer);
     });
