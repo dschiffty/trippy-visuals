@@ -1375,12 +1375,15 @@ export class LiquidShowVisualizer {
 
     if (hasRotation) ctx.restore();
 
-    // Subtle central glow at the vanishing point (drawn in screen space)
+    // Subtle central glow at the vanishing point (drawn in screen space).
+    // Fade it out as spread increases — with a large spawn ring the center is
+    // empty and the dot would be a visible artifact.
+    const centralGlowFade = Math.max(0, 1 - originRadius * 8);
     const coreR = 6 + audioBoost * 30;
-    if (coreR > 4) {
+    if (centralGlowFade > 0.01 && coreR > 4) {
       const [r, g, b] = hslToRgb(hNorm, isMono ? 0 : 0.4, 0.85);
       const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, coreR);
-      grad.addColorStop(0, `rgba(${r},${g},${b},${(0.18 + audioBoost * 0.5) * opacity})`);
+      grad.addColorStop(0, `rgba(${r},${g},${b},${(0.18 + audioBoost * 0.5) * opacity * centralGlowFade})`);
       grad.addColorStop(1, 'rgba(0,0,0,0)');
       ctx.shadowBlur = 0;
       ctx.fillStyle = grad;
@@ -2491,12 +2494,14 @@ export class LiquidShowVisualizer {
 
     // Stars-specific controls (rotation, thickness, spread)
     if (layer.type === 'stars' && !isMulti) {
+      const starsLabelCss = 'font-size:9px;font-weight:bold;color:#000;white-space:nowrap;';
+
       // --- Spin speed ---
       const rotRow = document.createElement('div');
       rotRow.className = 'll-image-row';
       rotRow.style.gap = '6px';
       const rotLabel = document.createElement('span');
-      rotLabel.style.cssText = 'font-size:10px;color:#0f0;white-space:nowrap;';
+      rotLabel.style.cssText = starsLabelCss;
       rotLabel.textContent = 'Spin:';
       rotRow.appendChild(rotLabel);
       const rotSlider = document.createElement('input');
@@ -2522,15 +2527,15 @@ export class LiquidShowVisualizer {
       dirRow.className = 'll-image-row';
       dirRow.style.gap = '4px';
       const dirLabel = document.createElement('span');
-      dirLabel.style.cssText = 'font-size:10px;color:#0f0;white-space:nowrap;margin-right:2px;';
-      dirLabel.textContent = 'Dir:';
+      dirLabel.style.cssText = starsLabelCss + 'margin-right:2px;';
+      dirLabel.textContent = 'Direction:';
       dirRow.appendChild(dirLabel);
       const currentDir = layer._starsRotDir ?? 'cw';
-      ['cw', 'ccw'].forEach(dir => {
+      [['cw', '↻ Clockwise'], ['ccw', '↺ Counter-Clockwise']].forEach(([dir, text]) => {
         const btn = document.createElement('button');
         btn.className = 'll-toggle' + (currentDir === dir ? ' active' : '');
-        btn.textContent = dir === 'cw' ? '↻ CW' : '↺ CCW';
-        btn.style.cssText = 'padding:2px 8px;font-size:10px;';
+        btn.textContent = text;
+        btn.style.cssText = 'padding:2px 6px;font-size:10px;';
         btn.addEventListener('click', () => {
           if (this._isLayerLocked(this.selectedLayerIndex)) return;
           layer._starsRotDir = dir;
@@ -2547,8 +2552,8 @@ export class LiquidShowVisualizer {
       thickRow.className = 'll-image-row';
       thickRow.style.gap = '6px';
       const thickLabel = document.createElement('span');
-      thickLabel.style.cssText = 'font-size:10px;color:#0f0;white-space:nowrap;';
-      thickLabel.textContent = 'Thick:';
+      thickLabel.style.cssText = starsLabelCss;
+      thickLabel.textContent = 'Thickness:';
       thickRow.appendChild(thickLabel);
       const thickSlider = document.createElement('input');
       thickSlider.type = 'range';
@@ -2573,13 +2578,13 @@ export class LiquidShowVisualizer {
       spreadRow.className = 'll-image-row';
       spreadRow.style.gap = '6px';
       const spreadLabel = document.createElement('span');
-      spreadLabel.style.cssText = 'font-size:10px;color:#0f0;white-space:nowrap;';
+      spreadLabel.style.cssText = starsLabelCss;
       spreadLabel.textContent = 'Spread:';
       spreadRow.appendChild(spreadLabel);
       const spreadSlider = document.createElement('input');
       spreadSlider.type = 'range';
       spreadSlider.className = 'll-row-slider';
-      spreadSlider.min = '0'; spreadSlider.max = '0.45'; spreadSlider.step = '0.025';
+      spreadSlider.min = '0'; spreadSlider.max = '1.35'; spreadSlider.step = '0.025';
       spreadSlider.value = String(layer._starsOriginRadius ?? 0);
       const spreadVal = document.createElement('span');
       spreadVal.style.cssText = 'font-size:10px;color:#aaa;min-width:28px;text-align:right;';
