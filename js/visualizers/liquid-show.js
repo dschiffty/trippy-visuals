@@ -685,14 +685,9 @@ export class LiquidShowVisualizer {
     if (layer._imgWanderY === undefined) layer._imgWanderY = 0;
 
     // Compute pan offset in pixels
+    // Pendulum is handled per-pixel in the render loop (vertical warp, no constant translation)
     let panOffX = 0, panOffY = 0;
-    if (panMode === 'pendulum') {
-      // Organic sine-wave sway — dual axes at slightly different frequencies
-      const freq = (0.04 + panSpeed * 0.1) * Math.PI * 2;
-      const amp  = 25 + panSpeed * 95; // 25–120 px amplitude
-      panOffX = amp * Math.sin(time * freq);
-      panOffY = amp * 0.38 * Math.sin(time * freq * 0.71 + 1.1);
-    } else if (panMode === 'wander') {
+    if (panMode === 'wander') {
       // Direction driven by smooth noise — never jerky, never stops
       const noiseFreq = 0.04 + panSpeed * 0.06;
       const wanderAngle = noise2D(time * noiseFreq + layer.offset.x * 0.01,
@@ -766,7 +761,15 @@ export class LiquidShowVisualizer {
 
         // Map back to pixel coordinates, incorporating pan offset
         let pxOffX = panOffX, pxOffY = panOffY;
-        if (panMode === 'wave') {
+        if (panMode === 'pendulum') {
+          // Vertical warp: bottom is anchored (factor=0), top sways freely (factor=1).
+          // No image translation — every row just shifts its sampling point horizontally.
+          const swayFactor = (bh - 1 - py) / Math.max(1, bh - 1);
+          const maxSway = Math.min(bw, bh) * 0.06; // ~6% of smaller dimension
+          const swayHz   = 0.1 + panSpeed * 0.35;  // 0.1–0.45 Hz
+          pxOffX = maxSway * swayFactor * Math.sin(time * swayHz * Math.PI * 2);
+          pxOffY = 0;
+        } else if (panMode === 'wave') {
           const waveAmp = motionBlur * 35;
           pxOffX = waveAmp * Math.sin(py * (Math.PI * 2 / (bh * 0.4)) + time * panSpeed * 4);
           pxOffY = waveAmp * 0.6 * Math.sin(px * (Math.PI * 2 / (bw * 0.5)) + time * panSpeed * 3 + 1.8);
@@ -2865,9 +2868,10 @@ export class LiquidShowVisualizer {
         btn.addEventListener('click', () => {
           if (this._isLayerLocked(this.selectedLayerIndex)) return;
           layer._imgPanMode = key;
-          // Reset wander position so new mode starts clean
+          // Reset wander position and motion blur accumulator so new mode starts clean
           layer._imgWanderX = 0;
           layer._imgWanderY = 0;
+          layer._panAccCanvas = null;
           panRow.querySelectorAll('[data-pan-mode]').forEach(b => b.classList.remove('active'));
           btn.classList.add('active');
           this._pushHistory();
