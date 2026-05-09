@@ -2838,9 +2838,18 @@ export class LiquidShowVisualizer {
               softness:   this.globals.softness,
               saturation: this.globals.saturation,
             };
+            lyr.params.scale       = 0.1;
             lyr.params.speed       = 2.0;
+            lyr.params.opacity     = 1.0;
+            lyr.params.drift       = 0;
+            lyr.params.rotation    = 0;
+            lyr.params.zoom        = 1;
+            lyr.params.mirror      = 0;
             lyr.params.turbulence  = 0.45;
             lyr.params.distortion  = 0.5;
+            lyr.params.fade        = 0;
+            lyr.params.tint        = 0;
+            lyr.params.invert      = 0;
             lyr.params.brightness  = 0.5;
             lyr.params.reactivity  = 0;
             lyr._starsRotSpeed      = 0;
