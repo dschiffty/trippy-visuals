@@ -81,7 +81,7 @@ function hslToRgb(h, s, l) {
 const LAYER_TYPES = ['wash', 'blob', 'marbling', 'bubble', 'image', 'scope', 'pulse', 'lissajous', 'stars', 'lightning'];
 const LAYER_TYPE_LABELS = { wash: 'Wash', blob: 'Blob', marbling: 'Marbling', bubble: 'Bubble', image: 'Image', scope: 'Scope', pulse: 'Pulse', lissajous: 'Lissajous', stars: 'Stars', lightning: 'Lightning' };
 // Layer types that support the canvas-level spin rotation controls
-const SPIN_LAYER_TYPES = new Set(['wash', 'bubble', 'pulse', 'image', 'lissajous', 'lightning']);
+const SPIN_LAYER_TYPES = new Set(['wash', 'bubble', 'pulse', 'image', 'lissajous']);
 const BLEND_MODES = [
   { value: 'source-over', label: 'Normal' },
   { value: 'lighter', label: 'Add' },
@@ -133,6 +133,7 @@ const LAYER_PARAMS = [
   { key: 'fade', label: 'Fade', min: 0, max: 1, default: 0, step: 0.05, group: 'Effects', tip: 'Edge fade vignette' },
   { key: 'tint', label: 'Tint', min: 0, max: 1, default: 0, step: 0.05, group: 'Effects', tip: 'Color wash overlay' },
   { key: 'invert', label: 'Invert', min: 0, max: 1, default: 0, step: 1, group: 'Effects', tip: 'Invert colors' },
+  { key: 'brightness', label: 'Bright', min: -1, max: 1, default: 0, step: 0.05, group: 'Effects', tip: 'Layer brightness (-1 dark → 0 normal → +1 bright)' },
   // Audio
   { key: 'reactivity', label: 'React', min: 0, max: 2, default: 0.5, step: 0.05, group: 'Audio', tip: 'How much audio affects this layer' },
 ];
@@ -1912,6 +1913,22 @@ export class LiquidShowVisualizer {
       lCtx.globalCompositeOperation = 'source-over';
     }
 
+    // Brightness — CSS filter applied via drawImage through a tmp canvas
+    const brightness = layer.params.brightness ?? 0;
+    if (Math.abs(brightness) > 0.01) {
+      const bVal = Math.max(0, 1 + brightness); // -1→0 (black), 0→1 (normal), +1→2 (2× bright)
+      if (!this._tmpCanvas) this._tmpCanvas = document.createElement('canvas');
+      const btc = this._tmpCanvas;
+      if (btc.width !== bw || btc.height !== bh) { btc.width = bw; btc.height = bh; }
+      const btCtx = btc.getContext('2d');
+      btCtx.clearRect(0, 0, bw, bh);
+      btCtx.drawImage(lCanvas, 0, 0);
+      lCtx.clearRect(0, 0, bw, bh);
+      lCtx.filter = `brightness(${bVal.toFixed(3)})`;
+      lCtx.drawImage(btc, 0, 0);
+      lCtx.filter = 'none';
+    }
+
     // Spin rotation — canvas-level post-render rotation around the layer centre
     if (SPIN_LAYER_TYPES.has(layer.type)) {
       const spinSpeed = layer._spinSpeed ?? 0;
@@ -3451,12 +3468,75 @@ export class LiquidShowVisualizer {
 
     this._updateHistoryButtons();
 
+    // Reset button — resets this layer's params to defaults; separate from Randomize
+    const resetBtn = document.createElement('button');
+    resetBtn.className = 'param-tool-btn ll-reset-btn';
+    resetBtn.innerHTML = '↺ Reset';
+    resetBtn.title = 'Reset all parameters for this layer to defaults';
+    resetBtn.addEventListener('click', () => {
+      if (this._isLayerLocked(this.selectedLayerIndex)) return;
+      // Reset all selected layers
+      for (const idx of this.selectedLayerIndices) {
+        if (this._isLayerLocked(idx)) return;
+        const tgt = this.layers[idx];
+        if (!tgt) continue;
+        // Reset standard params to LAYER_PARAMS defaults
+        LAYER_PARAMS.forEach(p => { tgt.params[p.key] = p.default; });
+        // Reset hue, colorMode, blendMode, audioSource
+        tgt.hue = 0;
+        tgt.colorMode = 'color';
+        tgt.blendMode = 'screen';
+        tgt.audioSource = 'full';
+        // Reset layer-specific params
+        if (tgt.type === 'image') {
+          tgt._imgPanMode    = 'off';
+          tgt._imgPanSpeed   = 0.3;
+          tgt._imgMotionBlur = 0;
+          tgt._panAccCanvas  = null;
+        }
+        if (tgt.type === 'stars') {
+          tgt._starsRotSpeed      = 0;
+          tgt._starsRotDir        = 'cw';
+          tgt._starsRotAngle      = undefined;
+          tgt._starsThickness     = 1.0;
+          tgt._starsOriginRadius  = 0;
+          tgt._starsFlowDir       = 'forward';
+          tgt._starsParticleShape = 'streak';
+          tgt._stars              = null;
+        }
+        if (tgt.type === 'lightning') {
+          tgt._lightFreq      = 0.4;
+          tgt._lightIntensity = 0.6;
+          tgt._lightBranching = 0.5;
+          tgt._lightDuration  = 0.4;
+          tgt._strikes        = null;
+        }
+        if (tgt.type === 'pulse') {
+          tgt._pulseMode  = 'constant';
+          tgt._pulseRings = null;
+        }
+        if (tgt.type === 'lissajous') {
+          tgt._lissajousShape = 2;
+        }
+        if (SPIN_LAYER_TYPES.has(tgt.type)) {
+          tgt._spinSpeed = 0;
+          tgt._spinDir   = 'cw';
+          tgt._spinAngle = undefined;
+        }
+      }
+      this._currentPresetId = null;
+      if (this._presetSelect) this._presetSelect.value = '';
+      this._rebuildLayerKnobs();
+      this._pushHistory();
+    });
+
     toolbar.appendChild(undoBtn);
     toolbar.appendChild(redoBtn);
     toolbar.appendChild(randomBtn);
     toolbar.appendChild(randomAllBtn);
     toolbar.appendChild(dynamicBtn);
     toolbar.appendChild(lockAllBtn);
+    toolbar.appendChild(resetBtn);
     container.appendChild(toolbar);
   }
 
@@ -3671,6 +3751,7 @@ export class LiquidShowVisualizer {
       zoom:       { center: 0.25, spread: 0.45 },   // favor lower zoom
       fade:       { center: 0.15, spread: 0.4 },    // favor low/no fade
       tint:       { center: 0.25, spread: 0.55 },   // subtle-moderate tint
+      brightness: { center: 0.5,  spread: 0.35 },   // keep close to neutral (center of -1..1 range)
     };
 
     LAYER_PARAMS.forEach(param => {
@@ -3855,8 +3936,23 @@ export class LiquidShowVisualizer {
       }
       this._randomizeLayerParams(layer);
     });
+
+    // Also randomize Environment globals — sensible ranges, nothing extreme
+    this.globals.audioGain   = parseFloat((0.5  + Math.random() * 2.0).toFixed(1));  // 0.5–2.5
+    this.globals.speed       = parseFloat((0.2  + Math.random() * 1.3).toFixed(1));  // 0.2–1.5
+    this.globals.turbulence  = parseFloat((0.1  + Math.random() * 0.7).toFixed(2));  // 0.1–0.8
+    this.globals.bloom       = parseFloat((      Math.random() * 0.4 ).toFixed(2));  // 0–0.4
+    this.globals.softness    = parseFloat((      Math.random() * 0.5 ).toFixed(2));  // 0–0.5
+    this.globals.contrast    = parseFloat((0.2  + Math.random() * 0.6).toFixed(2));  // 0.2–0.8
+    this.globals.saturation  = parseFloat((0.2  + Math.random() * 0.7).toFixed(2));  // 0.2–0.9
+    this.globals.interaction = parseFloat((      Math.random() * 0.8 ).toFixed(2));  // 0–0.8
+    this.globals.journey     = parseFloat((      Math.random() * 0.6 ).toFixed(2));  // 0–0.6
+    this.globals.grain       = parseFloat((      Math.random() * 0.3 ).toFixed(2));  // 0–0.3
+    this.journeyBases = null;
+
     this._rebuildLayerList();
     this._rebuildLayerKnobs();
+    this._buildGlobalControls();
     this._pushHistory();
   }
 

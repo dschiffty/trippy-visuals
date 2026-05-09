@@ -1863,6 +1863,20 @@ html, body {
   gap: 2px 3px;
 }
 
+/* Reset button — visually separated from Randomize, muted tone */
+.ll-reset-btn {
+  margin-left: auto;
+  opacity: 0.7;
+  border-color: #664444 !important;
+  color: #cc9988 !important;
+}
+.ll-reset-btn:hover {
+  opacity: 1;
+  background: rgba(120, 40, 40, 0.35) !important;
+  border-color: #cc5544 !important;
+  color: #ffbbaa !important;
+}
+
 .ll-image-row {
   display: flex;
   align-items: center;
