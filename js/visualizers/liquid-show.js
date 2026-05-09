@@ -321,6 +321,8 @@ export class LiquidShowVisualizer {
         starsOriginRadius: l.type === 'stars' ? (l._starsOriginRadius ?? 0) : undefined,
         starsFlowDir: l.type === 'stars' ? (l._starsFlowDir ?? 'forward') : undefined,
         starsParticleShape: l.type === 'stars' ? (l._starsParticleShape ?? 'streak') : undefined,
+        starsSize: l.type === 'stars' ? (l._starsSize ?? 1.0) : undefined,
+        starsTailLength: l.type === 'stars' ? (l._starsTailLength ?? 1.0) : undefined,
         lightFreq:      l.type === 'lightning' ? (l._lightFreq      ?? 0.4) : undefined,
         lightIntensity: l.type === 'lightning' ? (l._lightIntensity ?? 0.6) : undefined,
         lightBranching: l.type === 'lightning' ? (l._lightBranching ?? 0.5) : undefined,
@@ -382,6 +384,8 @@ export class LiquidShowVisualizer {
           if (saved.starsOriginRadius !== undefined) layer._starsOriginRadius = saved.starsOriginRadius;
           if (saved.starsFlowDir !== undefined) layer._starsFlowDir = saved.starsFlowDir;
           if (saved.starsParticleShape !== undefined) layer._starsParticleShape = saved.starsParticleShape;
+          if (saved.starsSize !== undefined) layer._starsSize = saved.starsSize;
+          if (saved.starsTailLength !== undefined) layer._starsTailLength = saved.starsTailLength;
         }
         // Restore lightning params
         if (saved.type === 'lightning') {
@@ -1385,15 +1389,21 @@ export class LiquidShowVisualizer {
     const rotSpeed = layer._starsRotSpeed ?? 0;
     const rotDir = layer._starsRotDir ?? 'cw';
     const thickness = layer._starsThickness ?? 1.0;
+    const starSize = layer._starsSize ?? 1.0;
+    const tailLength = layer._starsTailLength ?? 1.0;
     const originRadius = layer._starsOriginRadius ?? 0;
     const isBackward = (layer._starsFlowDir ?? 'forward') === 'backward';
     const particleShape = layer._starsParticleShape ?? 'streak';
+    const isMultiColor = layer.hue > 360;
+    // Effective hue for single-color mode; multicolor cycles per-particle
+    const effectiveHNorm = isMultiColor ? ((time * 0.05) % 1) : ((hNorm % 1 + 1) % 1);
 
     // Audio
     const audioBoost = audioLevel * reactivity;
-    const baseVel = 80 + speed * 600;
+    // Low end extends to near-zero: floor of 2px/s instead of 80px/s
+    const baseVel = 2 + speed * 600;
     const radialVel = baseVel + audioBoost * 800;
-    const streakFactor = 1.5 + speed * 2.5 + audioBoost * 6;
+    const streakFactor = (1.5 + speed * 2.5 + audioBoost * 6) * tailLength;
 
     // Persistence / decay
     const decay = distortion;
@@ -1441,6 +1451,7 @@ export class LiquidShowVisualizer {
       star.velMul = 0.5 + Math.random() * 0.9;
       star.brightness = 0.55 + Math.random() * 0.45;
       star.hueOffset = (Math.random() - 0.5) * 0.06;
+      star.hueBase = Math.random(); // 0–1 random hue for multicolor cycling
     };
 
     while (layer._stars.length < targetCount) {
@@ -1485,6 +1496,7 @@ export class LiquidShowVisualizer {
         depth, edgeFade, headDir,
         brightness: star.brightness,
         hueOffset: star.hueOffset,
+        hueBase: star.hueBase,
       });
     }
 
@@ -1512,25 +1524,27 @@ export class LiquidShowVisualizer {
         const alpha = d.brightness * d.edgeFade * glowStrength * 0.45;
         if (alpha < 0.02) continue;
         const baseW = (0.5 + d.depth * (1.5 + speed * 1.2 + scale * 0.6)) * thickness;
-        const h360 = ((hNorm + d.hueOffset + 1) % 1) * 360;
+        const h360 = isMultiColor
+          ? (((d.hueBase + time * 0.05) % 1) * 360)
+          : ((effectiveHNorm + d.hueOffset) % 1) * 360;
         const sat = isMono ? 0 : 0.4 + (1 - d.depth) * 0.3;
         const lightness = 60 + d.depth * 25;
         const style = `hsla(${h360},${Math.round(sat*100)}%,${Math.min(95,lightness)}%,${alpha})`;
         if (isStreak) {
           ctx.strokeStyle = style;
-          ctx.lineWidth = baseW * (3.5 + d.depth * 2.5);
+          ctx.lineWidth = baseW * (3.5 + d.depth * 2.5) * starSize;
           ctx.beginPath();
           ctx.moveTo(d.x1, d.y1);
           ctx.lineTo(d.x2, d.y2);
           ctx.stroke();
         } else {
-          const shapeR = Math.max(3, baseW) * (3.5 + d.depth * 2.0);
+          const shapeR = Math.max(3, baseW) * (3.5 + d.depth * 2.0) * starSize;
           // Tapered trail line stops just before the shape head
           const dxHT = d.x1 - d.x2, dyHT = d.y1 - d.y2;
           const lenHT = Math.hypot(dxHT, dyHT) || 1;
           if (lenHT > shapeR) {
             ctx.strokeStyle = style;
-            ctx.lineWidth = baseW * 1.5;
+            ctx.lineWidth = baseW * 1.5 * starSize;
             ctx.beginPath();
             ctx.moveTo(d.x1, d.y1);
             ctx.lineTo(d.x2 + dxHT / lenHT * shapeR, d.y2 + dyHT / lenHT * shapeR);
@@ -1549,24 +1563,26 @@ export class LiquidShowVisualizer {
       const d = drawList[i];
       const alpha = d.brightness * d.edgeFade;
       const baseW = (0.5 + d.depth * (1.5 + speed * 1.2 + scale * 0.6)) * thickness;
-      const h360 = ((hNorm + d.hueOffset + 1) % 1) * 360;
+      const h360 = isMultiColor
+        ? (((d.hueBase + time * 0.05) % 1) * 360)
+        : ((effectiveHNorm + d.hueOffset) % 1) * 360;
       const sat = isMono ? 0 : 0.15 + (1 - d.depth) * 0.25;
       const lightness = 70 + d.depth * 25;
       const style = `hsla(${h360},${Math.round(sat*100)}%,${Math.min(98,lightness)}%,${alpha})`;
       if (isStreak) {
         ctx.strokeStyle = style;
-        ctx.lineWidth = baseW;
+        ctx.lineWidth = baseW * starSize;
         ctx.beginPath();
         ctx.moveTo(d.x1, d.y1);
         ctx.lineTo(d.x2, d.y2);
         ctx.stroke();
       } else {
-        const shapeR = Math.max(3, baseW) * 2.5;
+        const shapeR = Math.max(3, baseW) * 2.5 * starSize;
         const dxHT = d.x1 - d.x2, dyHT = d.y1 - d.y2;
         const lenHT = Math.hypot(dxHT, dyHT) || 1;
         if (lenHT > shapeR) {
           ctx.strokeStyle = style;
-          ctx.lineWidth = baseW * 0.6;
+          ctx.lineWidth = baseW * 0.6 * starSize;
           ctx.beginPath();
           ctx.moveTo(d.x1, d.y1);
           ctx.lineTo(d.x2 + dxHT / lenHT * shapeR, d.y2 + dyHT / lenHT * shapeR);
@@ -2441,6 +2457,8 @@ export class LiquidShowVisualizer {
         starsOriginRadius: l.type === 'stars' ? (l._starsOriginRadius ?? 0) : undefined,
         starsFlowDir: l.type === 'stars' ? (l._starsFlowDir ?? 'forward') : undefined,
         starsParticleShape: l.type === 'stars' ? (l._starsParticleShape ?? 'streak') : undefined,
+        starsSize: l.type === 'stars' ? (l._starsSize ?? 1.0) : undefined,
+        starsTailLength: l.type === 'stars' ? (l._starsTailLength ?? 1.0) : undefined,
         lightFreq:      l.type === 'lightning' ? (l._lightFreq      ?? 0.4) : undefined,
         lightIntensity: l.type === 'lightning' ? (l._lightIntensity ?? 0.6) : undefined,
         lightBranching: l.type === 'lightning' ? (l._lightBranching ?? 0.5) : undefined,
@@ -2521,6 +2539,8 @@ export class LiquidShowVisualizer {
         if (saved.starsOriginRadius !== undefined) layer._starsOriginRadius = saved.starsOriginRadius;
         if (saved.starsFlowDir !== undefined) layer._starsFlowDir = saved.starsFlowDir;
         if (saved.starsParticleShape !== undefined) layer._starsParticleShape = saved.starsParticleShape;
+        if (saved.starsSize !== undefined) layer._starsSize = saved.starsSize;
+        if (saved.starsTailLength !== undefined) layer._starsTailLength = saved.starsTailLength;
       }
       if (saved.type === 'lightning') {
         if (saved.lightFreq !== undefined)      layer._lightFreq      = saved.lightFreq;
@@ -3262,6 +3282,107 @@ export class LiquidShowVisualizer {
         shapeRow.appendChild(btn);
       });
       container.appendChild(shapeRow);
+
+      // --- Size slider ---
+      const sizeRow = document.createElement('div');
+      sizeRow.className = 'll-image-row';
+      sizeRow.style.gap = '6px';
+      const sizeLabel = document.createElement('span');
+      sizeLabel.style.cssText = starsLabelCss;
+      sizeLabel.textContent = 'Size:';
+      sizeRow.appendChild(sizeLabel);
+      const sizeSlider = document.createElement('input');
+      sizeSlider.type = 'range';
+      sizeSlider.className = 'll-row-slider';
+      sizeSlider.min = '0.2'; sizeSlider.max = '5.0'; sizeSlider.step = '0.1';
+      sizeSlider.value = String(layer._starsSize ?? 1.0);
+      const sizeVal = document.createElement('span');
+      sizeVal.style.cssText = 'font-size:10px;color:#aaa;min-width:28px;text-align:right;';
+      sizeVal.textContent = Number(sizeSlider.value).toFixed(1);
+      sizeSlider.addEventListener('input', () => {
+        if (this._isLayerLocked(this.selectedLayerIndex)) return;
+        layer._starsSize = parseFloat(sizeSlider.value);
+        sizeVal.textContent = layer._starsSize.toFixed(1);
+        this._pushHistory();
+      });
+      sizeRow.appendChild(sizeSlider);
+      sizeRow.appendChild(sizeVal);
+      container.appendChild(sizeRow);
+
+      // --- Tail Length slider ---
+      const tailRow = document.createElement('div');
+      tailRow.className = 'll-image-row';
+      tailRow.style.gap = '6px';
+      const tailLabel = document.createElement('span');
+      tailLabel.style.cssText = starsLabelCss;
+      tailLabel.textContent = 'Tail Length:';
+      tailRow.appendChild(tailLabel);
+      const tailSlider = document.createElement('input');
+      tailSlider.type = 'range';
+      tailSlider.className = 'll-row-slider';
+      tailSlider.min = '0'; tailSlider.max = '5.0'; tailSlider.step = '0.1';
+      tailSlider.value = String(layer._starsTailLength ?? 1.0);
+      const tailVal = document.createElement('span');
+      tailVal.style.cssText = 'font-size:10px;color:#aaa;min-width:28px;text-align:right;';
+      tailVal.textContent = Number(tailSlider.value).toFixed(1);
+      tailSlider.addEventListener('input', () => {
+        if (this._isLayerLocked(this.selectedLayerIndex)) return;
+        layer._starsTailLength = parseFloat(tailSlider.value);
+        tailVal.textContent = layer._starsTailLength.toFixed(1);
+        this._pushHistory();
+      });
+      tailRow.appendChild(tailSlider);
+      tailRow.appendChild(tailVal);
+      container.appendChild(tailRow);
+
+      // --- Multicolor toggle ---
+      const starsColorRow = document.createElement('div');
+      starsColorRow.className = 'll-image-row';
+      starsColorRow.style.gap = '6px';
+      const starsColorLabel = document.createElement('span');
+      starsColorLabel.style.cssText = starsLabelCss + 'margin-right:2px;';
+      starsColorLabel.textContent = 'Color:';
+      starsColorRow.appendChild(starsColorLabel);
+
+      const starsIsMultiColor = layer.hue > 360;
+      const starsMultiBtn = document.createElement('button');
+      starsMultiBtn.className = 'll-toggle' + (starsIsMultiColor ? ' active' : '');
+      starsMultiBtn.textContent = 'Multicolor';
+      starsMultiBtn.title = 'Cycle unique hue per star particle';
+      starsMultiBtn.style.cssText = 'padding:2px 6px;font-size:10px;';
+      starsMultiBtn.addEventListener('click', () => {
+        if (this._isLayerLocked(this.selectedLayerIndex)) return;
+        if (layer.hue > 360) {
+          layer.hue = layer._savedHue ?? 200;
+        } else {
+          layer._savedHue = layer.hue;
+          layer.hue = 365;
+        }
+        const nowMulti = layer.hue > 360;
+        starsMultiBtn.classList.toggle('active', nowMulti);
+        // Update hue knob display and dim/undim it
+        const hueKnobData = this._panelKnobs.find(k => k.param.key === 'hue');
+        if (hueKnobData) {
+          hueKnobData.value = layer.hue;
+          hueKnobData.updateVisual?.(layer.hue);
+          const hueWrapper = hueKnobData.element.parentElement;
+          if (hueWrapper) hueWrapper.classList.toggle('ll-disabled', nowMulti);
+        }
+        this._pushHistory();
+      });
+      starsColorRow.appendChild(starsMultiBtn);
+      container.appendChild(starsColorRow);
+
+      // Dim hue knob on initial render if already in multicolor mode
+      if (starsIsMultiColor) {
+        requestAnimationFrame(() => {
+          const hueKnobData = this._panelKnobs.find(k => k.param.key === 'hue');
+          if (hueKnobData) {
+            const hueWrapper = hueKnobData.element.parentElement;
+            if (hueWrapper) hueWrapper.classList.add('ll-disabled');
+          }
+        });
+      }
     }
 
     // Lightning-specific controls (Frequency, Intensity, Branching, Duration, Multi-color)
@@ -3502,7 +3623,11 @@ export class LiquidShowVisualizer {
           tgt._starsOriginRadius  = 0;
           tgt._starsFlowDir       = 'forward';
           tgt._starsParticleShape = 'streak';
+          tgt._starsSize          = 1.0;
+          tgt._starsTailLength    = 1.0;
           tgt._stars              = null;
+          // If multicolor was active, restore a normal hue
+          if (tgt.hue > 360) tgt.hue = tgt._savedHue ?? 180;
         }
         if (tgt.type === 'lightning') {
           tgt._lightFreq      = 0.4;
@@ -3817,6 +3942,8 @@ export class LiquidShowVisualizer {
       layer._starsOriginRadius = Math.random() * 1.35;
       const _pShapes = ['streak', 'star', 'triangle', 'diamond', 'circle'];
       layer._starsParticleShape = _pShapes[Math.floor(Math.random() * _pShapes.length)];
+      layer._starsSize = 0.3 + Math.random() * 3.5;
+      layer._starsTailLength = Math.random() * 4.0;
     }
     if (newType === 'lightning') {
       layer._strikes = null;
@@ -3828,6 +3955,11 @@ export class LiquidShowVisualizer {
       layer._lightDuration  = 0.15 + Math.random() * 0.7;
     }
     this._randomizeLayerParams(layer);
+    // 30% chance of multicolor for stars (must run after _randomizeLayerParams sets hue)
+    if (newType === 'stars' && Math.random() < 0.3) {
+      layer._savedHue = layer.hue;
+      layer.hue = 365;
+    }
   }
 
   _randomizeLayer() {
@@ -3870,6 +4002,8 @@ export class LiquidShowVisualizer {
         layer._starsOriginRadius = Math.random() * 1.35;
         const _pShapes = ['streak', 'star', 'triangle', 'diamond', 'circle'];
         layer._starsParticleShape = _pShapes[Math.floor(Math.random() * _pShapes.length)];
+        layer._starsSize = 0.3 + Math.random() * 3.5;
+        layer._starsTailLength = Math.random() * 4.0;
       }
       if (newType === 'lightning') {
         layer._strikes = null;
@@ -3882,6 +4016,11 @@ export class LiquidShowVisualizer {
       }
 
       this._randomizeLayerParams(layer);
+      // 30% chance of multicolor for stars (must run after _randomizeLayerParams sets hue)
+      if (newType === 'stars' && Math.random() < 0.3) {
+        layer._savedHue = layer.hue;
+        layer.hue = 365;
+      }
     });
 
     // Randomize global params too
@@ -3924,6 +4063,8 @@ export class LiquidShowVisualizer {
         layer._starsOriginRadius = Math.random() * 1.35;
         const _pShapes = ['streak', 'star', 'triangle', 'diamond', 'circle'];
         layer._starsParticleShape = _pShapes[Math.floor(Math.random() * _pShapes.length)];
+        layer._starsSize = 0.3 + Math.random() * 3.5;
+        layer._starsTailLength = Math.random() * 4.0;
       }
       if (newType === 'lightning') {
         layer._strikes = null;
@@ -3935,6 +4076,11 @@ export class LiquidShowVisualizer {
         layer._lightDuration  = 0.15 + Math.random() * 0.7;
       }
       this._randomizeLayerParams(layer);
+      // 30% chance of multicolor for stars (must run after _randomizeLayerParams sets hue)
+      if (newType === 'stars' && Math.random() < 0.3) {
+        layer._savedHue = layer.hue;
+        layer.hue = 365;
+      }
     });
 
     // Also randomize Environment globals — sensible ranges, nothing extreme
