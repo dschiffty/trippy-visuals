@@ -1228,5 +1228,168 @@ export const LL_PRESETS = [
       "dynamicEnabled": true,
       "globalLock": false
     }
+  },
+  {
+    "id": "coffee-trip",
+    "name": "Coffee Trip",
+    "description": "Warm wash, dual pulse rings, and a scope layer with deep greens and amber tones",
+    "vizState": {
+      "layers": [
+        {
+          "type": "wash",
+          "visible": true,
+          "locked": false,
+          "params": {
+            "scale": 1.1,
+            "speed": 1.5,
+            "opacity": 0.4,
+            "drift": 1,
+            "rotation": 0.7000000000000001,
+            "zoom": 1.8,
+            "mirror": 1,
+            "turbulence": 0.9,
+            "distortion": 0.35000000000000003,
+            "fade": 0.15000000000000002,
+            "tint": 0.05,
+            "invert": 1,
+            "reactivity": 0,
+            "_jOpacity": -0.15420451485706346,
+            "_jScale": 0.17631866858267772,
+            "_jTurbulence": 0.033764452026365396,
+            "_jDrift": -0.14705027790110878
+          },
+          "blendMode": "lighten",
+          "audioSource": "none",
+          "audioSync": true,
+          "colorMode": "color",
+          "hue": 142.879580997109,
+          "offset": {
+            "x": 445.88313218292774,
+            "y": 514.1203145354134
+          }
+        },
+        {
+          "type": "pulse",
+          "visible": true,
+          "locked": false,
+          "params": {
+            "scale": 1.7000000000000002,
+            "speed": 1.2000000000000002,
+            "opacity": 0.35000000000000003,
+            "drift": 0.65,
+            "rotation": 1,
+            "zoom": 1.4000000000000001,
+            "mirror": 2,
+            "turbulence": 0.25,
+            "distortion": 0.4,
+            "fade": 0,
+            "tint": 0.25,
+            "invert": 0,
+            "reactivity": 0.55,
+            "_jOpacity": -0.09793114601426936,
+            "_jScale": 0.22129729800440082,
+            "_jTurbulence": 0.01721434300760523,
+            "_jDrift": 0.15848327603089843
+          },
+          "blendMode": "screen",
+          "audioSource": "highs",
+          "audioSync": true,
+          "colorMode": "color",
+          "hue": 123.72098004073621,
+          "offset": {
+            "x": 953.6390482995185,
+            "y": 311.6165549763094
+          },
+          "pulseMode": "constant"
+        },
+        {
+          "type": "pulse",
+          "visible": true,
+          "locked": false,
+          "params": {
+            "scale": 0.6000000000000001,
+            "speed": 0.6000000000000001,
+            "opacity": 0.55,
+            "drift": 0.8500000000000001,
+            "rotation": 0.2,
+            "zoom": 1,
+            "mirror": 2,
+            "turbulence": 0.25,
+            "distortion": 0.4,
+            "fade": 0.2,
+            "tint": 0.6000000000000001,
+            "invert": 1,
+            "reactivity": 1.4500000000000002,
+            "_jOpacity": 0.15270511956451863,
+            "_jScale": 0.20483334486747307,
+            "_jTurbulence": 0.1197976958540539,
+            "_jDrift": -0.037620995614888054
+          },
+          "blendMode": "lighten",
+          "audioSource": "bass",
+          "audioSync": true,
+          "colorMode": "color",
+          "hue": 41.068197145511014,
+          "offset": {
+            "x": 479.8675493739517,
+            "y": 486.2059261652365
+          },
+          "pulseMode": "constant"
+        },
+        {
+          "type": "scope",
+          "visible": true,
+          "locked": false,
+          "params": {
+            "scale": 1.5,
+            "speed": 0.5,
+            "opacity": 0.15000000000000002,
+            "drift": 0.1,
+            "rotation": 0.15000000000000002,
+            "zoom": 1.7000000000000002,
+            "mirror": 3,
+            "turbulence": 0.9,
+            "distortion": 0.55,
+            "fade": 0.35000000000000003,
+            "tint": 0.30000000000000004,
+            "invert": 0,
+            "reactivity": 1.1,
+            "_jOpacity": 0.058375849891468906,
+            "_jScale": 0.23745462845056076,
+            "_jTurbulence": -0.07527629058054923,
+            "_jDrift": -0.14645753329285727
+          },
+          "blendMode": "lighten",
+          "audioSource": "bass",
+          "audioSync": true,
+          "colorMode": "color",
+          "hue": 260.3170161121672,
+          "offset": {
+            "x": 896.0582347386006,
+            "y": 570.6259552276465
+          }
+        }
+      ],
+      "selectedLayerIndex": 3,
+      "soloLayerIndex": -1,
+      "globals": {
+        "audioGain": 1.6,
+        "speed": 0.8,
+        "turbulence": 0.9,
+        "bloom": 0.5,
+        "softness": 0.75,
+        "contrast": 0.9,
+        "saturation": 0.45,
+        "interaction": 0.25,
+        "journey": 0.8,
+        "grain": 0.75,
+        "bw": false,
+        "threshold": 0.5,
+        "density": 0.5,
+        "bwGlow": 0.5
+      },
+      "dynamicEnabled": false,
+      "globalLock": false
+    }
   }
 ];
