@@ -314,7 +314,7 @@ export class LiquidShowVisualizer {
         starsThickness: l.type === 'stars' ? (l._starsThickness ?? 1.0) : undefined,
         starsOriginRadius: l.type === 'stars' ? (l._starsOriginRadius ?? 0) : undefined,
         starsFlowDir: l.type === 'stars' ? (l._starsFlowDir ?? 'forward') : undefined,
-        starsSpawnShape: l.type === 'stars' ? (l._starsSpawnShape ?? 'circle') : undefined,
+        starsParticleShape: l.type === 'stars' ? (l._starsParticleShape ?? 'streak') : undefined,
       })),
       selectedLayerIndex: this.selectedLayerIndex,
       soloLayerIndex: this.soloLayerIndex,
@@ -364,7 +364,7 @@ export class LiquidShowVisualizer {
           if (saved.starsThickness !== undefined) layer._starsThickness = saved.starsThickness;
           if (saved.starsOriginRadius !== undefined) layer._starsOriginRadius = saved.starsOriginRadius;
           if (saved.starsFlowDir !== undefined) layer._starsFlowDir = saved.starsFlowDir;
-          if (saved.starsSpawnShape !== undefined) layer._starsSpawnShape = saved.starsSpawnShape;
+          if (saved.starsParticleShape !== undefined) layer._starsParticleShape = saved.starsParticleShape;
         }
         return layer;
       });
@@ -1210,49 +1210,52 @@ export class LiquidShowVisualizer {
    * t ∈ [0,1) parameterises position along the perimeter.
    * jitter is a small positive radial offset for natural softening.
    */
-  _starsShapeSpawn(spawnR, shape, t, jitter) {
-    // When spawnR is negligible all shapes degenerate to a circle near center
-    if (!spawnR || spawnR < 2 || shape === 'circle') {
-      return { angle: t * Math.PI * 2, r: spawnR + jitter };
+  /**
+   * Draw a single particle shape path centered at (px, py) with its leading
+   * tip facing direction `dir` (radians). The caller must call ctx.fill().
+   * Vertices are rotated manually to avoid ctx.save/restore overhead.
+   */
+  _starsDrawShape(ctx, shape, px, py, size, dir) {
+    ctx.beginPath();
+    if (shape === 'circle') {
+      ctx.arc(px, py, size, 0, Math.PI * 2);
+      return;
     }
-
-    if (shape === 'spiral') {
-      // Archimedean spiral: 3 turns, radius grows from 0 → spawnR
-      const angle = t * Math.PI * 6;
-      const r = Math.max(1, spawnR * t);
-      return { angle, r: r + jitter };
-    }
-
-    // General polygon / star
-    let totalSegs, r0fn, r1fn;
+    const c = Math.cos(dir), s = Math.sin(dir);
+    // pt: add a rotated vertex at local (lx,ly); move=true for first point
+    const pt = (lx, ly, move) => {
+      const x = px + c * lx - s * ly;
+      const y = py + s * lx + c * ly;
+      move ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+    };
     if (shape === 'star') {
-      // 5-point star alternates outer/inner radii
-      const outerR = spawnR, innerR = spawnR * 0.4;
-      totalSegs = 10; // 5 outer + 5 inner
-      r0fn = seg => (seg % 2 === 0) ? outerR : innerR;
-      r1fn = seg => (seg % 2 === 0) ? innerR : outerR;
-    } else {
-      const sides = { triangle: 3, pentagon: 5, hexagon: 6 }[shape] ?? 6;
-      totalSegs = sides;
-      r0fn = () => spawnR;
-      r1fn = () => spawnR;
+      // 5-point star; outer tip at local (size,0) faces direction of travel
+      const inn = size * 0.38;
+      for (let i = 0; i < 10; i++) {
+        const r = i % 2 === 0 ? size : inn;
+        const a = (i / 10) * Math.PI * 2;
+        pt(Math.cos(a) * r, Math.sin(a) * r, i === 0);
+      }
+    } else if (shape === 'triangle') {
+      // Isoceles triangle; apex at local (size,0) = forward
+      pt( size,         0,          true);
+      pt(-size * 0.6,  -size * 0.75, false);
+      pt(-size * 0.6,   size * 0.75, false);
+    } else if (shape === 'diamond') {
+      // Diamond (rhombus); front tip at local (size,0) = forward
+      pt( size,        0,          true);
+      pt( 0,           size * 0.5, false);
+      pt(-size * 0.75, 0,          false);
+      pt( 0,          -size * 0.5, false);
     }
-
-    const seg = Math.min(totalSegs - 1, Math.floor(t * totalSegs));
-    const frac = (t * totalSegs) - seg;
-    const a0 = -Math.PI / 2 + (seg / totalSegs) * Math.PI * 2;
-    const a1 = -Math.PI / 2 + ((seg + 1) / totalSegs) * Math.PI * 2;
-    const x = Math.cos(a0) * r0fn(seg) * (1 - frac) + Math.cos(a1) * r1fn(seg) * frac;
-    const y = Math.sin(a0) * r0fn(seg) * (1 - frac) + Math.sin(a1) * r1fn(seg) * frac;
-    const dist = Math.sqrt(x * x + y * y);
-    return { angle: Math.atan2(y, x), r: dist + jitter };
+    ctx.closePath();
   }
 
   /**
    * Stars / hyperspace warp tunnel.
-   * Particles spawn near a central vanishing point and fly outward radially,
-   * elongating into streaks as they accelerate. Speed slider + audio reactivity
-   * combine to control velocity and streak length.
+   * Particles spawn near a central vanishing point and fly outward radially.
+   * Per-particle shapes (streak, star, triangle, diamond, circle) are drawn at
+   * the leading edge of each particle with a tapered trail behind them.
    */
   _renderStars(layer, ctx, w, h, time, audioLevel) {
     const { scale, speed, turbulence, opacity, drift, distortion, reactivity } = layer.params;
@@ -1265,18 +1268,15 @@ export class LiquidShowVisualizer {
     const thickness = layer._starsThickness ?? 1.0;
     const originRadius = layer._starsOriginRadius ?? 0;
     const isBackward = (layer._starsFlowDir ?? 'forward') === 'backward';
-    const spawnShape = layer._starsSpawnShape ?? 'circle';
+    const particleShape = layer._starsParticleShape ?? 'streak';
 
-    // Audio: louder = faster + longer streaks (only when audioSync is on)
+    // Audio
     const audioBoost = audioLevel * reactivity;
     const baseVel = 80 + speed * 600;
-    const audioVelBoost = audioBoost * 800;
-    const radialVel = baseVel + audioVelBoost;
-
-    // Streak length factor
+    const radialVel = baseVel + audioBoost * 800;
     const streakFactor = 1.5 + speed * 2.5 + audioBoost * 6;
 
-    // Persistence — distortion controls trail decay
+    // Persistence / decay
     const decay = distortion;
     if (decay > 0.01) {
       ctx.globalCompositeOperation = 'source-over';
@@ -1286,7 +1286,7 @@ export class LiquidShowVisualizer {
       ctx.clearRect(0, 0, w, h);
     }
 
-    // Per-layer stars state
+    // Per-layer state
     if (!layer._stars) layer._stars = [];
     if (layer._lastStarsTime === undefined) layer._lastStarsTime = time;
     if (layer._starsRotAngle === undefined) layer._starsRotAngle = 0;
@@ -1294,42 +1294,29 @@ export class LiquidShowVisualizer {
     const dt = Math.min(0.1, Math.max(0, time - layer._lastStarsTime));
     layer._lastStarsTime = time;
 
-    // Accumulate rotation angle (rad/sec: at speed=1 → π/6 rad/s ≈ 30°/s)
     if (rotSpeed > 0) {
       layer._starsRotAngle += rotSpeed * dt * (Math.PI / 6) * (rotDir === 'cw' ? 1 : -1);
     }
 
-    // Vanishing point with optional drift
+    // Vanishing point
     const driftX = drift * 30 * Math.sin(time * 0.13 + layer.offset.x);
     const driftY = drift * 30 * Math.cos(time * 0.11 + layer.offset.y);
     const cx = w / 2 + driftX;
     const cy = h / 2 + driftY;
 
-    // Maximum visible radius (corner-to-center distance, with margin)
     const maxR = Math.sqrt((w * 0.5) ** 2 + (h * 0.5) ** 2) * 1.15;
-
-    // Spawn radius for forward mode
     const minDim = Math.min(w, h);
     const spawnR = originRadius * minDim * 0.5;
 
-    // Target population
-    const targetCount = Math.min(
-      350,
-      Math.floor(80 + scale * 100 + audioBoost * 80)
-    );
+    const targetCount = Math.min(350, Math.floor(80 + scale * 100 + audioBoost * 80));
 
-    // --- Helper: create a fresh particle at the correct spawn position ---
     const spawnStar = (star) => {
       if (isBackward) {
-        // Backward: spawn at outer canvas edge, fly inward
         star.angle = Math.random() * Math.PI * 2;
         star.r = maxR * (0.82 + Math.random() * 0.13);
       } else {
-        // Forward: spawn at shaped perimeter
-        const jitter = Math.random() * minDim * 0.04 + 1;
-        const sp = this._starsShapeSpawn(spawnR, spawnShape, Math.random(), jitter);
-        star.angle = sp.angle;
-        star.r = sp.r;
+        star.angle = Math.random() * Math.PI * 2;
+        star.r = spawnR + Math.random() * minDim * 0.04 + 1;
       }
       star.prevR = star.r;
       star.velMul = 0.5 + Math.random() * 0.9;
@@ -1337,51 +1324,46 @@ export class LiquidShowVisualizer {
       star.hueOffset = (Math.random() - 0.5) * 0.06;
     };
 
-    // Spawn new particles to reach target count
     while (layer._stars.length < targetCount) {
       const star = {};
       spawnStar(star);
       layer._stars.push(star);
     }
 
-    // Update particles + collect draw data
+    // Update + build draw list
     const drawList = [];
     for (let i = layer._stars.length - 1; i >= 0; i--) {
       const star = layer._stars[i];
       star.prevR = star.r;
-
-      // Move — inward for backward, outward for forward
       star.r += (isBackward ? -1 : 1) * radialVel * star.velMul * dt;
 
-      // Recycle check
       const expired = isBackward
         ? (star.r < Math.max(1, spawnR * 0.5))
         : (star.r > maxR);
       if (expired) { spawnStar(star); continue; }
 
-      // Streak endpoints
       const step = Math.abs(star.r - star.prevR);
       const streakLen = Math.min(maxR * 0.6, step * streakFactor);
-      // For backward, tail is at larger r (behind direction of travel)
       const tailR = isBackward
         ? Math.min(maxR * 1.05, star.r + streakLen)
         : Math.max(0, star.r - streakLen);
 
       const depth = star.r / maxR;
-      // Edge fade: forward fades near outer edge; backward fades near inner edge
       const edgeFade = isBackward
         ? (depth < 0.15 ? Math.max(0, depth / 0.15) : 1)
         : (depth > 0.85 ? Math.max(0, 1 - (depth - 0.85) / 0.15) : 1);
 
       const cosA = Math.cos(star.angle);
       const sinA = Math.sin(star.angle);
+      // headDir: direction the shape's leading tip should face
+      // Forward → pointing outward from center; backward → pointing toward center
+      const headDir = isBackward ? (star.angle + Math.PI) : star.angle;
       drawList.push({
-        x1: cx + cosA * tailR,
+        x1: cx + cosA * tailR,   // tail
         y1: cy + sinA * tailR,
-        x2: cx + cosA * star.r,
+        x2: cx + cosA * star.r,  // head
         y2: cy + sinA * star.r,
-        depth,
-        edgeFade,
+        depth, edgeFade, headDir,
         brightness: star.brightness,
         hueOffset: star.hueOffset,
       });
@@ -1390,7 +1372,7 @@ export class LiquidShowVisualizer {
     ctx.lineCap = 'round';
     ctx.globalAlpha = opacity;
 
-    // Apply rotation transform around the vanishing point
+    // Rotation transform
     const rotAngle = layer._starsRotAngle;
     const hasRotation = rotAngle !== 0;
     if (hasRotation) {
@@ -1400,7 +1382,9 @@ export class LiquidShowVisualizer {
       ctx.translate(-cx, -cy);
     }
 
-    // Glow pass — thick semi-transparent strokes for bloom halo
+    const isStreak = particleShape === 'streak';
+
+    // --- Glow pass (lighter composite, bloom halo) ---
     const glowStrength = turbulence * 0.7 + audioBoost * 0.9;
     if (glowStrength > 0.05) {
       ctx.globalCompositeOperation = 'lighter';
@@ -1408,43 +1392,76 @@ export class LiquidShowVisualizer {
         const d = drawList[i];
         const alpha = d.brightness * d.edgeFade * glowStrength * 0.45;
         if (alpha < 0.02) continue;
-        const baseLineW = (0.5 + d.depth * (1.5 + speed * 1.2 + scale * 0.6)) * thickness;
-        const glowW = baseLineW * (3.5 + d.depth * 2.5);
+        const baseW = (0.5 + d.depth * (1.5 + speed * 1.2 + scale * 0.6)) * thickness;
         const h360 = ((hNorm + d.hueOffset + 1) % 1) * 360;
         const sat = isMono ? 0 : 0.4 + (1 - d.depth) * 0.3;
         const lightness = 60 + d.depth * 25;
-        ctx.strokeStyle = `hsla(${h360}, ${Math.round(sat * 100)}%, ${Math.min(95, lightness)}%, ${alpha})`;
-        ctx.lineWidth = glowW;
-        ctx.beginPath();
-        ctx.moveTo(d.x1, d.y1);
-        ctx.lineTo(d.x2, d.y2);
-        ctx.stroke();
+        const style = `hsla(${h360},${Math.round(sat*100)}%,${Math.min(95,lightness)}%,${alpha})`;
+        if (isStreak) {
+          ctx.strokeStyle = style;
+          ctx.lineWidth = baseW * (3.5 + d.depth * 2.5);
+          ctx.beginPath();
+          ctx.moveTo(d.x1, d.y1);
+          ctx.lineTo(d.x2, d.y2);
+          ctx.stroke();
+        } else {
+          const shapeR = Math.max(3, baseW) * (3.5 + d.depth * 2.0);
+          // Tapered trail line stops just before the shape head
+          const dxHT = d.x1 - d.x2, dyHT = d.y1 - d.y2;
+          const lenHT = Math.hypot(dxHT, dyHT) || 1;
+          if (lenHT > shapeR) {
+            ctx.strokeStyle = style;
+            ctx.lineWidth = baseW * 1.5;
+            ctx.beginPath();
+            ctx.moveTo(d.x1, d.y1);
+            ctx.lineTo(d.x2 + dxHT / lenHT * shapeR, d.y2 + dyHT / lenHT * shapeR);
+            ctx.stroke();
+          }
+          ctx.fillStyle = style;
+          this._starsDrawShape(ctx, particleShape, d.x2, d.y2, shapeR, d.headDir);
+          ctx.fill();
+        }
       }
       ctx.globalCompositeOperation = 'source-over';
     }
 
-    // Core streak pass — bright thin lines
+    // --- Core pass (crisp solid shapes / lines) ---
     for (let i = 0; i < drawList.length; i++) {
       const d = drawList[i];
       const alpha = d.brightness * d.edgeFade;
-      const lineWidth = (0.5 + d.depth * (1.5 + speed * 1.2 + scale * 0.6)) * thickness;
+      const baseW = (0.5 + d.depth * (1.5 + speed * 1.2 + scale * 0.6)) * thickness;
       const h360 = ((hNorm + d.hueOffset + 1) % 1) * 360;
       const sat = isMono ? 0 : 0.15 + (1 - d.depth) * 0.25;
       const lightness = 70 + d.depth * 25;
-      ctx.strokeStyle = `hsla(${h360}, ${Math.round(sat * 100)}%, ${Math.min(98, lightness)}%, ${alpha})`;
-      ctx.lineWidth = lineWidth;
-      ctx.beginPath();
-      ctx.moveTo(d.x1, d.y1);
-      ctx.lineTo(d.x2, d.y2);
-      ctx.stroke();
+      const style = `hsla(${h360},${Math.round(sat*100)}%,${Math.min(98,lightness)}%,${alpha})`;
+      if (isStreak) {
+        ctx.strokeStyle = style;
+        ctx.lineWidth = baseW;
+        ctx.beginPath();
+        ctx.moveTo(d.x1, d.y1);
+        ctx.lineTo(d.x2, d.y2);
+        ctx.stroke();
+      } else {
+        const shapeR = Math.max(3, baseW) * 2.5;
+        const dxHT = d.x1 - d.x2, dyHT = d.y1 - d.y2;
+        const lenHT = Math.hypot(dxHT, dyHT) || 1;
+        if (lenHT > shapeR) {
+          ctx.strokeStyle = style;
+          ctx.lineWidth = baseW * 0.6;
+          ctx.beginPath();
+          ctx.moveTo(d.x1, d.y1);
+          ctx.lineTo(d.x2 + dxHT / lenHT * shapeR, d.y2 + dyHT / lenHT * shapeR);
+          ctx.stroke();
+        }
+        ctx.fillStyle = style;
+        this._starsDrawShape(ctx, particleShape, d.x2, d.y2, shapeR, d.headDir);
+        ctx.fill();
+      }
     }
 
     if (hasRotation) ctx.restore();
 
-    // Subtle central glow at the vanishing point (drawn in screen space).
-    // Fade it out as spread increases — with a large spawn ring the center is
-    // empty and the dot would be a visible artifact.
-    // Also suppress for backward mode (stars don't converge at center).
+    // Central vanishing-point glow (suppressed for backward mode and large spread)
     const centralGlowFade = isBackward ? 0 : Math.max(0, 1 - originRadius * 8);
     const coreR = 6 + audioBoost * 30;
     if (centralGlowFade > 0.01 && coreR > 4) {
@@ -2019,7 +2036,7 @@ export class LiquidShowVisualizer {
         starsThickness: l.type === 'stars' ? (l._starsThickness ?? 1.0) : undefined,
         starsOriginRadius: l.type === 'stars' ? (l._starsOriginRadius ?? 0) : undefined,
         starsFlowDir: l.type === 'stars' ? (l._starsFlowDir ?? 'forward') : undefined,
-        starsSpawnShape: l.type === 'stars' ? (l._starsSpawnShape ?? 'circle') : undefined,
+        starsParticleShape: l.type === 'stars' ? (l._starsParticleShape ?? 'streak') : undefined,
       })),
       selectedLayerIndex: this.selectedLayerIndex,
       selectedLayerIndices: [...this.selectedLayerIndices],
@@ -2088,7 +2105,7 @@ export class LiquidShowVisualizer {
         if (saved.starsThickness !== undefined) layer._starsThickness = saved.starsThickness;
         if (saved.starsOriginRadius !== undefined) layer._starsOriginRadius = saved.starsOriginRadius;
         if (saved.starsFlowDir !== undefined) layer._starsFlowDir = saved.starsFlowDir;
-        if (saved.starsSpawnShape !== undefined) layer._starsSpawnShape = saved.starsSpawnShape;
+        if (saved.starsParticleShape !== undefined) layer._starsParticleShape = saved.starsParticleShape;
       }
       return layer;
     });
@@ -2203,7 +2220,7 @@ export class LiquidShowVisualizer {
         layer._lastStarsTime = undefined;
         layer._starsRotAngle = undefined;
         layer._starsFlowDir = undefined;
-        layer._starsSpawnShape = undefined;
+        layer._starsParticleShape = undefined;
         this._rebuildLayerList();
         this._rebuildLayerKnobs();
         this._pushHistory();
@@ -2695,7 +2712,7 @@ export class LiquidShowVisualizer {
       spreadRow.appendChild(spreadVal);
       container.appendChild(spreadRow);
 
-      // --- Spawn shape picker ---
+      // --- Particle shape picker ---
       const shapeRow = document.createElement('div');
       shapeRow.className = 'll-image-row';
       shapeRow.style.cssText = 'gap:4px;flex-wrap:wrap;';
@@ -2703,26 +2720,24 @@ export class LiquidShowVisualizer {
       shapeLabel.style.cssText = starsLabelCss + 'margin-right:2px;';
       shapeLabel.textContent = 'Shape:';
       shapeRow.appendChild(shapeLabel);
-      const currentShape = layer._starsSpawnShape ?? 'circle';
-      const SPAWN_SHAPES = [
-        ['circle',   'Circle'],
+      const currentShape = layer._starsParticleShape ?? 'streak';
+      const PARTICLE_SHAPES = [
+        ['streak',   'Oval / Streak'],
         ['star',     '★ Star'],
         ['triangle', 'Triangle'],
-        ['pentagon', 'Pentagon'],
-        ['hexagon',  'Hexagon'],
-        ['spiral',   '🌀 Spiral'],
+        ['diamond',  '◆ Diamond'],
+        ['circle',   'Circle'],
       ];
-      SPAWN_SHAPES.forEach(([key, label]) => {
+      PARTICLE_SHAPES.forEach(([key, label]) => {
         const btn = document.createElement('button');
         btn.className = 'll-toggle' + (currentShape === key ? ' active' : '');
         btn.textContent = label;
-        btn.dataset.spawnShape = key;
+        btn.dataset.particleShape = key;
         btn.style.cssText = 'padding:2px 5px;font-size:9px;';
         btn.addEventListener('click', () => {
           if (this._isLayerLocked(this.selectedLayerIndex)) return;
-          layer._starsSpawnShape = key;
-          layer._stars = null; // respawn into new shape immediately
-          shapeRow.querySelectorAll('[data-spawn-shape]').forEach(b => b.classList.remove('active'));
+          layer._starsParticleShape = key;
+          shapeRow.querySelectorAll('[data-particle-shape]').forEach(b => b.classList.remove('active'));
           btn.classList.add('active');
           this._pushHistory();
         });
@@ -3087,8 +3102,8 @@ export class LiquidShowVisualizer {
       layer._starsFlowDir = Math.random() < 0.5 ? 'forward' : 'backward';
       layer._starsThickness = 0.5 + Math.random() * 14.5;
       layer._starsOriginRadius = Math.random() * 1.35;
-      const _rShapes = ['circle', 'star', 'triangle', 'pentagon', 'hexagon', 'spiral'];
-      layer._starsSpawnShape = _rShapes[Math.floor(Math.random() * _rShapes.length)];
+      const _pShapes = ['streak', 'star', 'triangle', 'diamond', 'circle'];
+      layer._starsParticleShape = _pShapes[Math.floor(Math.random() * _pShapes.length)];
     }
     this._randomizeLayerParams(layer);
   }
@@ -3131,8 +3146,8 @@ export class LiquidShowVisualizer {
         layer._starsFlowDir = Math.random() < 0.5 ? 'forward' : 'backward';
         layer._starsThickness = 0.5 + Math.random() * 14.5;
         layer._starsOriginRadius = Math.random() * 1.35;
-        const _rShapes = ['circle', 'star', 'triangle', 'pentagon', 'hexagon', 'spiral'];
-        layer._starsSpawnShape = _rShapes[Math.floor(Math.random() * _rShapes.length)];
+        const _pShapes = ['streak', 'star', 'triangle', 'diamond', 'circle'];
+        layer._starsParticleShape = _pShapes[Math.floor(Math.random() * _pShapes.length)];
       }
 
       this._randomizeLayerParams(layer);
@@ -3176,8 +3191,8 @@ export class LiquidShowVisualizer {
         layer._starsFlowDir = Math.random() < 0.5 ? 'forward' : 'backward';
         layer._starsThickness = 0.5 + Math.random() * 14.5;
         layer._starsOriginRadius = Math.random() * 1.35;
-        const _rShapes = ['circle', 'star', 'triangle', 'pentagon', 'hexagon', 'spiral'];
-        layer._starsSpawnShape = _rShapes[Math.floor(Math.random() * _rShapes.length)];
+        const _pShapes = ['streak', 'star', 'triangle', 'diamond', 'circle'];
+        layer._starsParticleShape = _pShapes[Math.floor(Math.random() * _pShapes.length)];
       }
       this._randomizeLayerParams(layer);
     });
