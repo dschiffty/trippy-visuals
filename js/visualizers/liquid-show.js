@@ -309,6 +309,10 @@ export class LiquidShowVisualizer {
         imageSrc: l.type === 'image' && l.imageData ? l.imageData.src : undefined,
         lissajousShape: l.type === 'lissajous' ? (l._lissajousShape || 2) : undefined,
         pulseMode: l.type === 'pulse' ? (l._pulseMode || 'constant') : undefined,
+        starsRotSpeed: l.type === 'stars' ? (l._starsRotSpeed ?? 0) : undefined,
+        starsRotDir: l.type === 'stars' ? (l._starsRotDir ?? 'cw') : undefined,
+        starsThickness: l.type === 'stars' ? (l._starsThickness ?? 1.0) : undefined,
+        starsOriginRadius: l.type === 'stars' ? (l._starsOriginRadius ?? 0) : undefined,
       })),
       selectedLayerIndex: this.selectedLayerIndex,
       soloLayerIndex: this.soloLayerIndex,
@@ -350,6 +354,13 @@ export class LiquidShowVisualizer {
         // Restore pulse mode
         if (saved.type === 'pulse' && saved.pulseMode !== undefined) {
           layer._pulseMode = saved.pulseMode;
+        }
+        // Restore stars params
+        if (saved.type === 'stars') {
+          if (saved.starsRotSpeed !== undefined) layer._starsRotSpeed = saved.starsRotSpeed;
+          if (saved.starsRotDir !== undefined) layer._starsRotDir = saved.starsRotDir;
+          if (saved.starsThickness !== undefined) layer._starsThickness = saved.starsThickness;
+          if (saved.starsOriginRadius !== undefined) layer._starsOriginRadius = saved.starsOriginRadius;
         }
         return layer;
       });
@@ -1201,19 +1212,23 @@ export class LiquidShowVisualizer {
     const hNorm = layer.hue / 360;
     const isMono = layer.colorMode === 'mono';
 
+    // Stars-specific params (with defaults for backward compat)
+    const rotSpeed = layer._starsRotSpeed ?? 0;
+    const rotDir = layer._starsRotDir ?? 'cw';
+    const thickness = layer._starsThickness ?? 1.0;
+    const originRadius = layer._starsOriginRadius ?? 0;
+
     // Audio: louder = faster + longer streaks (only when audioSync is on)
     const audioBoost = audioLevel * reactivity;
     // Map slider speed (0–2) to base radial velocity in px/sec
-    // At speed=0: very slow drift; at speed=2: fast warp; audio boost adds on top
     const baseVel = 80 + speed * 600;
-    const audioVelBoost = audioBoost * 800; // significant audio kick
+    const audioVelBoost = audioBoost * 800;
     const radialVel = baseVel + audioVelBoost;
 
-    // Streak length factor — multiplier for the line length drawn each frame
-    // Higher speed/audio = longer streaks. Length = streakFactor * frame's radial step.
+    // Streak length factor
     const streakFactor = 1.5 + speed * 2.5 + audioBoost * 6;
 
-    // Persistence — distortion controls trail decay (similar to pulse)
+    // Persistence — distortion controls trail decay
     const decay = distortion;
     if (decay > 0.01) {
       ctx.globalCompositeOperation = 'source-over';
@@ -1226,9 +1241,15 @@ export class LiquidShowVisualizer {
     // Per-layer stars state
     if (!layer._stars) layer._stars = [];
     if (layer._lastStarsTime === undefined) layer._lastStarsTime = time;
+    if (layer._starsRotAngle === undefined) layer._starsRotAngle = 0;
 
     const dt = Math.min(0.1, Math.max(0, time - layer._lastStarsTime));
     layer._lastStarsTime = time;
+
+    // Accumulate rotation angle (rad/sec: at speed=1 → π/6 rad/s ≈ 30°/s)
+    if (rotSpeed > 0) {
+      layer._starsRotAngle += rotSpeed * dt * (Math.PI / 6) * (rotDir === 'cw' ? 1 : -1);
+    }
 
     // Vanishing point with optional drift
     const driftX = drift * 30 * Math.sin(time * 0.13 + layer.offset.x);
@@ -1239,36 +1260,31 @@ export class LiquidShowVisualizer {
     // Maximum visible radius (corner-to-center distance, with margin)
     const maxR = Math.sqrt((w * 0.5) ** 2 + (h * 0.5) ** 2) * 1.15;
 
-    // Target population — scales with layer scale; audio adds extra density
-    // Cap to keep performance solid on mobile
+    // Spawn radius — at 0 stars appear near center; at max they spawn from a ring
+    const minDim = Math.min(w, h);
+    const spawnR = originRadius * minDim * 0.5;
+
+    // Target population
     const targetCount = Math.min(
       350,
       Math.floor(80 + scale * 100 + audioBoost * 80)
     );
 
-    // Spawn new particles to reach target count
+    // Spawn new particles
     while (layer._stars.length < targetCount) {
       const angle = Math.random() * Math.PI * 2;
-      // Spawn at a small random initial radius so they don't all start at the
-      // exact center (which would render as a single bright dot)
-      const r0 = Math.random() * Math.min(w, h) * 0.05 + 1;
+      const r0 = spawnR + Math.random() * minDim * 0.04 + 1;
       layer._stars.push({
         angle,
         r: r0,
         prevR: r0,
-        // Per-particle speed multiplier for natural variation
         velMul: 0.5 + Math.random() * 0.9,
-        // Brightness variation
         brightness: 0.55 + Math.random() * 0.45,
-        // Hue offset for subtle color variation
         hueOffset: (Math.random() - 0.5) * 0.06,
       });
     }
 
-    // Update particles + collect draw data (separated into two passes for perf)
-    // Pass 1: thick semi-transparent strokes for glow halo
-    // Pass 2: thin bright strokes for the core streak
-    // Avoiding ctx.shadowBlur which triggers a costly per-stroke compositing pass.
+    // Update particles + collect draw data
     const drawList = [];
     for (let i = layer._stars.length - 1; i >= 0; i--) {
       const star = layer._stars[i];
@@ -1276,9 +1292,9 @@ export class LiquidShowVisualizer {
       star.r += radialVel * star.velMul * dt;
 
       if (star.r > maxR) {
-        // Recycle particle back near center
+        // Recycle particle back to spawn ring
         star.angle = Math.random() * Math.PI * 2;
-        star.r = Math.random() * Math.min(w, h) * 0.04 + 1;
+        star.r = spawnR + Math.random() * minDim * 0.04 + 1;
         star.prevR = star.r;
         star.velMul = 0.5 + Math.random() * 0.9;
         star.brightness = 0.55 + Math.random() * 0.45;
@@ -1286,8 +1302,6 @@ export class LiquidShowVisualizer {
         continue;
       }
 
-      // Streak start/end positions; clamp length so very fast motion doesn't
-      // render absurdly long lines off-screen
       const step = star.r - star.prevR;
       const streakLen = Math.min(maxR * 0.6, step * streakFactor);
       const tailR = Math.max(0, star.r - streakLen);
@@ -1308,7 +1322,17 @@ export class LiquidShowVisualizer {
     ctx.lineCap = 'round';
     ctx.globalAlpha = opacity;
 
-    // Glow pass — only render if turbulence or audio actually contribute glow
+    // Apply rotation transform around the vanishing point
+    const rotAngle = layer._starsRotAngle;
+    const hasRotation = rotAngle !== 0;
+    if (hasRotation) {
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.rotate(rotAngle);
+      ctx.translate(-cx, -cy);
+    }
+
+    // Glow pass — thick semi-transparent strokes for bloom halo
     const glowStrength = turbulence * 0.7 + audioBoost * 0.9;
     if (glowStrength > 0.05) {
       ctx.globalCompositeOperation = 'lighter';
@@ -1317,7 +1341,7 @@ export class LiquidShowVisualizer {
         const edgeFade = d.depth > 0.85 ? Math.max(0, 1 - (d.depth - 0.85) / 0.15) : 1;
         const alpha = d.brightness * edgeFade * glowStrength * 0.45;
         if (alpha < 0.02) continue;
-        const baseLineW = 0.5 + d.depth * (1.5 + speed * 1.2 + scale * 0.6);
+        const baseLineW = (0.5 + d.depth * (1.5 + speed * 1.2 + scale * 0.6)) * thickness;
         const glowW = baseLineW * (3.5 + d.depth * 2.5);
         const h360 = ((hNorm + d.hueOffset + 1) % 1) * 360;
         const sat = isMono ? 0 : 0.4 + (1 - d.depth) * 0.3;
@@ -1337,7 +1361,7 @@ export class LiquidShowVisualizer {
       const d = drawList[i];
       const edgeFade = d.depth > 0.85 ? Math.max(0, 1 - (d.depth - 0.85) / 0.15) : 1;
       const alpha = d.brightness * edgeFade;
-      const lineWidth = 0.5 + d.depth * (1.5 + speed * 1.2 + scale * 0.6);
+      const lineWidth = (0.5 + d.depth * (1.5 + speed * 1.2 + scale * 0.6)) * thickness;
       const h360 = ((hNorm + d.hueOffset + 1) % 1) * 360;
       const sat = isMono ? 0 : 0.15 + (1 - d.depth) * 0.25;
       const lightness = 70 + d.depth * 25;
@@ -1349,7 +1373,9 @@ export class LiquidShowVisualizer {
       ctx.stroke();
     }
 
-    // Subtle central glow at the vanishing point (more pronounced with audio)
+    if (hasRotation) ctx.restore();
+
+    // Subtle central glow at the vanishing point (drawn in screen space)
     const coreR = 6 + audioBoost * 30;
     if (coreR > 4) {
       const [r, g, b] = hslToRgb(hNorm, isMono ? 0 : 0.4, 0.85);
@@ -1918,6 +1944,10 @@ export class LiquidShowVisualizer {
         imageSrc: l.type === 'image' && l.imageData ? l.imageData.src : undefined,
         lissajousShape: l.type === 'lissajous' ? (l._lissajousShape || 2) : undefined,
         pulseMode: l.type === 'pulse' ? (l._pulseMode || 'constant') : undefined,
+        starsRotSpeed: l.type === 'stars' ? (l._starsRotSpeed ?? 0) : undefined,
+        starsRotDir: l.type === 'stars' ? (l._starsRotDir ?? 'cw') : undefined,
+        starsThickness: l.type === 'stars' ? (l._starsThickness ?? 1.0) : undefined,
+        starsOriginRadius: l.type === 'stars' ? (l._starsOriginRadius ?? 0) : undefined,
       })),
       selectedLayerIndex: this.selectedLayerIndex,
       selectedLayerIndices: [...this.selectedLayerIndices],
@@ -1979,6 +2009,12 @@ export class LiquidShowVisualizer {
       }
       if (saved.type === 'pulse' && saved.pulseMode !== undefined) {
         layer._pulseMode = saved.pulseMode;
+      }
+      if (saved.type === 'stars') {
+        if (saved.starsRotSpeed !== undefined) layer._starsRotSpeed = saved.starsRotSpeed;
+        if (saved.starsRotDir !== undefined) layer._starsRotDir = saved.starsRotDir;
+        if (saved.starsThickness !== undefined) layer._starsThickness = saved.starsThickness;
+        if (saved.starsOriginRadius !== undefined) layer._starsOriginRadius = saved.starsOriginRadius;
       }
       return layer;
     });
@@ -2091,6 +2127,7 @@ export class LiquidShowVisualizer {
         layer._lastPulseTime = null;
         layer._stars = null;
         layer._lastStarsTime = undefined;
+        layer._starsRotAngle = undefined;
         this._rebuildLayerList();
         this._rebuildLayerKnobs();
         this._pushHistory();
@@ -2450,6 +2487,114 @@ export class LiquidShowVisualizer {
       colorRow.appendChild(multiBtn);
 
       container.appendChild(colorRow);
+    }
+
+    // Stars-specific controls (rotation, thickness, spread)
+    if (layer.type === 'stars' && !isMulti) {
+      // --- Spin speed ---
+      const rotRow = document.createElement('div');
+      rotRow.className = 'll-image-row';
+      rotRow.style.gap = '6px';
+      const rotLabel = document.createElement('span');
+      rotLabel.style.cssText = 'font-size:10px;color:#0f0;white-space:nowrap;';
+      rotLabel.textContent = 'Spin:';
+      rotRow.appendChild(rotLabel);
+      const rotSlider = document.createElement('input');
+      rotSlider.type = 'range';
+      rotSlider.className = 'll-row-slider';
+      rotSlider.min = '0'; rotSlider.max = '2'; rotSlider.step = '0.05';
+      rotSlider.value = String(layer._starsRotSpeed ?? 0);
+      const rotVal = document.createElement('span');
+      rotVal.style.cssText = 'font-size:10px;color:#aaa;min-width:24px;text-align:right;';
+      rotVal.textContent = Number(rotSlider.value).toFixed(1);
+      rotSlider.addEventListener('input', () => {
+        if (this._isLayerLocked(this.selectedLayerIndex)) return;
+        layer._starsRotSpeed = parseFloat(rotSlider.value);
+        rotVal.textContent = layer._starsRotSpeed.toFixed(1);
+        this._pushHistory();
+      });
+      rotRow.appendChild(rotSlider);
+      rotRow.appendChild(rotVal);
+      container.appendChild(rotRow);
+
+      // --- Rotation direction ---
+      const dirRow = document.createElement('div');
+      dirRow.className = 'll-image-row';
+      dirRow.style.gap = '4px';
+      const dirLabel = document.createElement('span');
+      dirLabel.style.cssText = 'font-size:10px;color:#0f0;white-space:nowrap;margin-right:2px;';
+      dirLabel.textContent = 'Dir:';
+      dirRow.appendChild(dirLabel);
+      const currentDir = layer._starsRotDir ?? 'cw';
+      ['cw', 'ccw'].forEach(dir => {
+        const btn = document.createElement('button');
+        btn.className = 'll-toggle' + (currentDir === dir ? ' active' : '');
+        btn.textContent = dir === 'cw' ? '↻ CW' : '↺ CCW';
+        btn.style.cssText = 'padding:2px 8px;font-size:10px;';
+        btn.addEventListener('click', () => {
+          if (this._isLayerLocked(this.selectedLayerIndex)) return;
+          layer._starsRotDir = dir;
+          dirRow.querySelectorAll('.ll-toggle').forEach(b => b.classList.remove('active'));
+          btn.classList.add('active');
+          this._pushHistory();
+        });
+        dirRow.appendChild(btn);
+      });
+      container.appendChild(dirRow);
+
+      // --- Star thickness ---
+      const thickRow = document.createElement('div');
+      thickRow.className = 'll-image-row';
+      thickRow.style.gap = '6px';
+      const thickLabel = document.createElement('span');
+      thickLabel.style.cssText = 'font-size:10px;color:#0f0;white-space:nowrap;';
+      thickLabel.textContent = 'Thick:';
+      thickRow.appendChild(thickLabel);
+      const thickSlider = document.createElement('input');
+      thickSlider.type = 'range';
+      thickSlider.className = 'll-row-slider';
+      thickSlider.min = '0.5'; thickSlider.max = '5'; thickSlider.step = '0.25';
+      thickSlider.value = String(layer._starsThickness ?? 1.0);
+      const thickVal = document.createElement('span');
+      thickVal.style.cssText = 'font-size:10px;color:#aaa;min-width:24px;text-align:right;';
+      thickVal.textContent = Number(thickSlider.value).toFixed(1);
+      thickSlider.addEventListener('input', () => {
+        if (this._isLayerLocked(this.selectedLayerIndex)) return;
+        layer._starsThickness = parseFloat(thickSlider.value);
+        thickVal.textContent = layer._starsThickness.toFixed(1);
+        this._pushHistory();
+      });
+      thickRow.appendChild(thickSlider);
+      thickRow.appendChild(thickVal);
+      container.appendChild(thickRow);
+
+      // --- Origin radius / Spread ---
+      const spreadRow = document.createElement('div');
+      spreadRow.className = 'll-image-row';
+      spreadRow.style.gap = '6px';
+      const spreadLabel = document.createElement('span');
+      spreadLabel.style.cssText = 'font-size:10px;color:#0f0;white-space:nowrap;';
+      spreadLabel.textContent = 'Spread:';
+      spreadRow.appendChild(spreadLabel);
+      const spreadSlider = document.createElement('input');
+      spreadSlider.type = 'range';
+      spreadSlider.className = 'll-row-slider';
+      spreadSlider.min = '0'; spreadSlider.max = '0.45'; spreadSlider.step = '0.025';
+      spreadSlider.value = String(layer._starsOriginRadius ?? 0);
+      const spreadVal = document.createElement('span');
+      spreadVal.style.cssText = 'font-size:10px;color:#aaa;min-width:28px;text-align:right;';
+      spreadVal.textContent = Number(spreadSlider.value).toFixed(2);
+      spreadSlider.addEventListener('input', () => {
+        if (this._isLayerLocked(this.selectedLayerIndex)) return;
+        layer._starsOriginRadius = parseFloat(spreadSlider.value);
+        spreadVal.textContent = layer._starsOriginRadius.toFixed(2);
+        // Reset particles so they respawn from the new origin radius immediately
+        layer._stars = null;
+        this._pushHistory();
+      });
+      spreadRow.appendChild(spreadSlider);
+      spreadRow.appendChild(spreadVal);
+      container.appendChild(spreadRow);
     }
 
     // Toolbar: Randomize + Randomize All + Dynamic
