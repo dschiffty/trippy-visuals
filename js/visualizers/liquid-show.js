@@ -2139,6 +2139,13 @@ export class LiquidShowVisualizer {
       this._maskPanelPrevDisplay = this.panelEl.style.display || '';
       this.panelEl.style.display = 'none';
     }
+    // Also force-hide the title bar, menu bar, and status bar so only the
+    // mask toolbar floats over the canvas. On exit we restore to _llUiHidden
+    // so the user's chosen global hide state is honoured.
+    for (const cls of ['.title-bar', '.menu-bar', '.status-bar']) {
+      const el = document.querySelector(cls);
+      if (el) el.style.display = 'none';
+    }
     this._buildMaskToolbar();
     this._attachMaskCanvasHandlers();
     // Note: _rebuildLayerKnobs not needed here — panel is hidden.
@@ -2160,6 +2167,13 @@ export class LiquidShowVisualizer {
     if (this.panelEl && this._maskPanelPrevDisplay !== undefined) {
       this.panelEl.style.display = this._maskPanelPrevDisplay;
       this._maskPanelPrevDisplay = undefined;
+    }
+    // Restore title / menu bars to the user's chosen global UI state.
+    // If _llUiHidden is true the user had hidden everything; keep it hidden.
+    // If false, show the bars again.
+    for (const cls of ['.title-bar', '.menu-bar', '.status-bar']) {
+      const el = document.querySelector(cls);
+      if (el) el.style.display = this._llUiHidden ? 'none' : '';
     }
     this._rebuildLayerList();
     this._rebuildLayerKnobs();
