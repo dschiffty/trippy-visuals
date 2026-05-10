@@ -269,6 +269,17 @@ export class LiquidShowVisualizer {
     this._maskPanelPrevDisplay = undefined; // saved panel.style.display while editing
     this._maskPolygonPoints = [];   // in-progress polygon vertices [[x,y], ...]
     this._maskPolygonCursor = null; // current cursor pos for preview line
+    this._maskPolyDragging = false;    // true while dragging an existing vertex
+    this._maskPolyDragSource = null;   // { type:'inprogress'|'mask', maskIdx?, ptIdx }
+    this._maskPolyDragWas = false;     // set true when a drag occurred (suppress next click)
+
+    // Full-UI hide (canvas click to toggle all chrome)
+    this._llUiHidden = false;
+    this._canvasUIClickHandler = null;
+
+    // Feathered mask compositing — reused offscreen canvases
+    this._featherMaskCanvas = null;
+    this._featherTmpCanvas  = null;
   }
 
   // --- Layer Creation ---
@@ -304,7 +315,8 @@ export class LiquidShowVisualizer {
       // Mask system: array of shapes (rect/ellipse/freehand) in normalized 0-1 coords.
       // Stored as array to allow future multi-mask support without data migration.
       _masks: [],
-      _maskMode: 'include', // 'include' (render only inside) or 'exclude' (render everywhere except)
+      _maskMode: 'include',    // 'include' (render only inside) or 'exclude' (render everywhere except)
+      _maskFeather: 0,          // feather radius in pixels (0 = hard edge)
     };
   }
 
@@ -348,6 +360,7 @@ export class LiquidShowVisualizer {
         spinDir:   SPIN_LAYER_TYPES.has(l.type) ? (l._spinDir   ?? 'cw') : undefined,
         masks: Array.isArray(l._masks) && l._masks.length > 0 ? this._cloneMasks(l._masks) : undefined,
         maskMode: Array.isArray(l._masks) && l._masks.length > 0 ? (l._maskMode ?? 'include') : undefined,
+        maskFeather: (l._maskFeather ?? 0) > 0 ? l._maskFeather : undefined,
       })),
       selectedLayerIndex: this.selectedLayerIndex,
       soloLayerIndex: this.soloLayerIndex,
@@ -430,7 +443,8 @@ export class LiquidShowVisualizer {
         } else {
           layer._masks = [];
         }
-        layer._maskMode = saved.maskMode ?? 'include';
+        layer._maskMode    = saved.maskMode ?? 'include';
+        layer._maskFeather = saved.maskFeather ?? 0;
         return layer;
       });
     }
@@ -2116,6 +2130,9 @@ export class LiquidShowVisualizer {
     this._maskCurrentDraw = null;
     this._maskPolygonPoints = [];
     this._maskPolygonCursor = null;
+    this._maskPolyDragging = false;
+    this._maskPolyDragSource = null;
+    this._maskPolyDragWas = false;
     // Hide the settings panel so the canvas is fully visible while drawing.
     // The mask toolbar is `position:fixed` and stays on top.
     if (this.panelEl && this._maskPanelPrevDisplay === undefined) {
@@ -2134,6 +2151,9 @@ export class LiquidShowVisualizer {
     this._maskCurrentDraw = null;
     this._maskPolygonPoints = [];
     this._maskPolygonCursor = null;
+    this._maskPolyDragging = false;
+    this._maskPolyDragSource = null;
+    this._maskPolyDragWas = false;
     this._destroyMaskToolbar();
     this._detachMaskCanvasHandlers();
     // Restore the settings panel to whatever display state it had before
@@ -2144,6 +2164,32 @@ export class LiquidShowVisualizer {
     this._rebuildLayerList();
     this._rebuildLayerKnobs();
     this._pushHistory();
+  }
+
+  // Toggle all UI chrome: settings panel + title bar + menu bar + status bar.
+  // Used by canvas-click-to-hide on desktop and by main.js setUIHidden on mobile.
+  _toggleLLFullUI() {
+    this._llUiHidden = !this._llUiHidden;
+    this._applyLLUIHidden(this._llUiHidden);
+  }
+
+  _applyLLUIHidden(hidden) {
+    if (this.panelEl) this.panelEl.style.display = hidden ? 'none' : '';
+    for (const cls of ['.title-bar', '.menu-bar', '.status-bar']) {
+      const el = document.querySelector(cls);
+      if (el) el.style.display = hidden ? 'none' : '';
+    }
+  }
+
+  // Called by main.js on mobile tap-to-hide so the visualizer controls its own chrome.
+  setUIHidden(hidden) {
+    this._llUiHidden = hidden;
+    // Panel visibility is already handled by main.js (ll-ui-hidden class).
+    // We only need to handle the extra chrome elements here.
+    for (const cls of ['.title-bar', '.menu-bar', '.status-bar']) {
+      const el = document.querySelector(cls);
+      if (el) el.style.display = hidden ? 'none' : '';
+    }
   }
 
   // Close and commit the in-progress polygon.
@@ -2255,6 +2301,34 @@ export class LiquidShowVisualizer {
     });
     bar.appendChild(clearBtn);
 
+    // Separator
+    const sep3 = document.createElement('span');
+    sep3.style.cssText = 'width:1px;height:18px;background:#444;margin:0 2px;';
+    bar.appendChild(sep3);
+
+    // Feather slider
+    const featherLabel = document.createElement('span');
+    featherLabel.style.cssText = 'font-size:11px;color:#aaa;white-space:nowrap;';
+    featherLabel.textContent = `Feather: ${Math.round(layer._maskFeather ?? 0)}px`;
+    bar.appendChild(featherLabel);
+
+    const featherSlider = document.createElement('input');
+    featherSlider.type = 'range';
+    featherSlider.min = 0;
+    featherSlider.max = 80;
+    featherSlider.step = 1;
+    featherSlider.value = Math.round(layer._maskFeather ?? 0);
+    featherSlider.style.cssText = 'width:80px;accent-color:#3478f6;vertical-align:middle;';
+    featherSlider.title = 'Soften mask edges — 0 = hard edge, higher = graduated fade';
+    featherSlider.addEventListener('input', () => {
+      layer._maskFeather = Number(featherSlider.value);
+      featherLabel.textContent = `Feather: ${featherSlider.value}px`;
+    });
+    featherSlider.addEventListener('change', () => {
+      this._pushHistory();
+    });
+    bar.appendChild(featherSlider);
+
     // Done
     const doneBtn = makeBtn('✓ Done', 'Exit mask edit mode', false);
     doneBtn.style.cssText += 'background:#3478f6;color:#fff;font-weight:bold;';
@@ -2294,12 +2368,52 @@ export class LiquidShowVisualizer {
       };
     };
 
+    // Helper: find a draggable vertex within threshold of point p
+    const findVertex = (p) => {
+      const rect = canvas.getBoundingClientRect();
+      const thresh = 16 / Math.min(rect.width, rect.height);
+      // Check in-progress polygon vertices first
+      for (let i = 0; i < this._maskPolygonPoints.length; i++) {
+        const pt = this._maskPolygonPoints[i];
+        if (Math.hypot(p.x - pt[0], p.y - pt[1]) < thresh) {
+          return { type: 'inprogress', ptIdx: i };
+        }
+      }
+      // Check completed freehand/polygon shapes
+      const layer = this.layers[this._maskEditingLayerIndex];
+      if (layer && Array.isArray(layer._masks)) {
+        for (let mi = 0; mi < layer._masks.length; mi++) {
+          const m = layer._masks[mi];
+          if (m.type === 'freehand' && Array.isArray(m.points)) {
+            for (let pi = 0; pi < m.points.length; pi++) {
+              if (Math.hypot(p.x - m.points[pi][0], p.y - m.points[pi][1]) < thresh) {
+                return { type: 'mask', maskIdx: mi, ptIdx: pi };
+              }
+            }
+          }
+        }
+      }
+      return null;
+    };
+
     const onDown = (e) => {
       if (this._maskEditingLayerIndex < 0) return;
-      // Polygon uses click events, not mousedown/up drag flow
-      if (this._maskTool === 'polygon') return;
-      e.preventDefault();
       const p = getNorm(e);
+
+      if (this._maskTool === 'polygon') {
+        // In polygon mode, mousedown checks for vertex drag (not normal shape draw flow)
+        const hit = findVertex(p);
+        if (hit) {
+          e.preventDefault();
+          this._maskPolyDragging = true;
+          this._maskPolyDragSource = hit;
+          this._maskPolyDragWas = false;
+        }
+        return;
+      }
+
+      // Non-polygon tools: normal drag-to-draw flow
+      e.preventDefault();
       this._maskDrawStart = p;
       this._maskDrawing = true;
       if (this._maskTool === 'freehand') {
@@ -2310,10 +2424,32 @@ export class LiquidShowVisualizer {
     };
 
     const onMove = (e) => {
-      // Always update polygon cursor for live preview line
       if (this._maskTool === 'polygon' && this._maskEditingLayerIndex >= 0) {
-        this._maskPolygonCursor = getNorm(e);
+        const p = getNorm(e);
+        this._maskPolygonCursor = p;
+
+        // Vertex drag
+        if (this._maskPolyDragging && this._maskPolyDragSource) {
+          e.preventDefault();
+          const src = this._maskPolyDragSource;
+          if (src.type === 'inprogress') {
+            this._maskPolygonPoints[src.ptIdx] = [p.x, p.y];
+          } else {
+            const layer = this.layers[this._maskEditingLayerIndex];
+            if (layer && layer._masks[src.maskIdx]) {
+              layer._masks[src.maskIdx].points[src.ptIdx] = [p.x, p.y];
+            }
+          }
+          this._maskPolyDragWas = true;
+          canvas.style.cursor = 'grabbing';
+          return;
+        }
+
+        // Update cursor: grab when hovering over a vertex, crosshair otherwise
+        const hit = findVertex(p);
+        canvas.style.cursor = hit ? 'grab' : 'crosshair';
       }
+
       if (!this._maskDrawing || !this._maskCurrentDraw) return;
       e.preventDefault();
       const p = getNorm(e);
@@ -2331,6 +2467,13 @@ export class LiquidShowVisualizer {
     };
 
     const onUp = (e) => {
+      // End vertex drag (polygon tool)
+      if (this._maskPolyDragging) {
+        this._maskPolyDragging = false;
+        this._maskPolyDragSource = null;
+        canvas.style.cursor = 'crosshair';
+        return;
+      }
       if (!this._maskDrawing) return;
       e?.preventDefault?.();
       this._maskDrawing = false;
@@ -2353,6 +2496,11 @@ export class LiquidShowVisualizer {
     // Polygon: click to place vertices, double-click or first-vertex click to close
     const onPolyClick = (e) => {
       if (this._maskTool !== 'polygon' || this._maskEditingLayerIndex < 0) return;
+      // A drag just ended — suppress vertex placement for this click
+      if (this._maskPolyDragWas) {
+        this._maskPolyDragWas = false;
+        return;
+      }
       e.preventDefault();
       const p = getNorm(e);
 
@@ -2479,42 +2627,73 @@ export class LiquidShowVisualizer {
       ctx.setLineDash([]);
     }
 
-    // Draw in-progress polygon construction preview
-    if (this._maskTool === 'polygon' && this._maskPolygonPoints.length > 0) {
-      const pts = this._maskPolygonPoints;
+    // --- Polygon tool overlays (in-progress + completed vertex handles) ---
+    if (this._maskTool === 'polygon') {
       const polyColor = mode === 'include' ? 'rgba(120,255,160,0.95)' : 'rgba(255,160,120,0.95)';
+      const hoverThresh = 16 / Math.min(w, h); // normalized units
+      const cur = this._maskPolygonCursor;
 
-      // Dashed edges + preview line to cursor
-      ctx.lineWidth = 2;
-      ctx.setLineDash([8, 6]);
-      ctx.strokeStyle = polyColor;
-      ctx.beginPath();
-      ctx.moveTo(pts[0][0] * w, pts[0][1] * h);
-      for (let i = 1; i < pts.length; i++) {
-        ctx.lineTo(pts[i][0] * w, pts[i][1] * h);
-      }
-      if (this._maskPolygonCursor) {
-        ctx.lineTo(this._maskPolygonCursor.x * w, this._maskPolygonCursor.y * h);
-      }
-      ctx.stroke();
-      ctx.setLineDash([]);
+      const isHovered = (nx, ny) =>
+        cur && Math.hypot(cur.x - nx, cur.y - ny) < hoverThresh;
 
-      // Vertex dot handles
-      for (let i = 0; i < pts.length; i++) {
-        const px = pts[i][0] * w, py = pts[i][1] * h;
-        const isFirst = i === 0;
-        // Filled dot
-        ctx.fillStyle = polyColor;
+      // Draw in-progress polygon
+      if (this._maskPolygonPoints.length > 0) {
+        const pts = this._maskPolygonPoints;
+
+        // Dashed edges + preview line to cursor
+        ctx.lineWidth = 2;
+        ctx.setLineDash([8, 6]);
+        ctx.strokeStyle = polyColor;
         ctx.beginPath();
-        ctx.arc(px, py, isFirst ? 6 : 4, 0, Math.PI * 2);
-        ctx.fill();
-        // White ring around first vertex when polygon can be closed (≥ 3 points)
-        if (isFirst && pts.length >= 3) {
-          ctx.strokeStyle = 'rgba(255,255,255,0.85)';
-          ctx.lineWidth = 1.5;
+        ctx.moveTo(pts[0][0] * w, pts[0][1] * h);
+        for (let i = 1; i < pts.length; i++) {
+          ctx.lineTo(pts[i][0] * w, pts[i][1] * h);
+        }
+        if (cur) ctx.lineTo(cur.x * w, cur.y * h);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // Vertex dot handles (with hover highlight)
+        for (let i = 0; i < pts.length; i++) {
+          const [nx, ny] = pts[i];
+          const px = nx * w, py = ny * h;
+          const isFirst = i === 0;
+          const hovered = isHovered(nx, ny);
+          ctx.fillStyle = hovered ? '#fff' : polyColor;
           ctx.beginPath();
-          ctx.arc(px, py, 9, 0, Math.PI * 2);
-          ctx.stroke();
+          ctx.arc(px, py, hovered ? 7 : (isFirst ? 6 : 4), 0, Math.PI * 2);
+          ctx.fill();
+          // Close-ring on first vertex when ≥ 3 points
+          if (isFirst && pts.length >= 3) {
+            ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            ctx.arc(px, py, 9, 0, Math.PI * 2);
+            ctx.stroke();
+          }
+        }
+      }
+
+      // Draw draggable vertex handles on completed freehand/polygon shapes
+      if (Array.isArray(layer._masks)) {
+        for (const m of layer._masks) {
+          if (m.type === 'freehand' && Array.isArray(m.points)) {
+            for (const [nx, ny] of m.points) {
+              const px = nx * w, py = ny * h;
+              const hovered = isHovered(nx, ny);
+              ctx.fillStyle = hovered ? '#fff' : polyColor;
+              ctx.beginPath();
+              ctx.arc(px, py, hovered ? 7 : 4, 0, Math.PI * 2);
+              ctx.fill();
+              if (hovered) {
+                ctx.strokeStyle = polyColor;
+                ctx.lineWidth = 1.5;
+                ctx.beginPath();
+                ctx.arc(px, py, 9, 0, Math.PI * 2);
+                ctx.stroke();
+              }
+            }
+          }
         }
       }
     }
@@ -2630,12 +2809,18 @@ export class LiquidShowVisualizer {
       compCtx.imageSmoothingEnabled = true;
       compCtx.imageSmoothingQuality = 'high';
       const hasMask = this._layerHasActiveMask(layer);
-      if (hasMask) {
+      const feather  = layer._maskFeather ?? 0;
+      if (hasMask && feather > 0) {
+        // Feathered mask: composite via alpha-channel approach
+        this._compositeLayerWithFeather(compCtx, this.layerCanvases[i], layer, w, h, feather);
+      } else if (hasMask) {
         compCtx.save();
         this._applyMaskClip(compCtx, layer, w, h);
+        compCtx.drawImage(this.layerCanvases[i], 0, 0, w, h);
+        compCtx.restore();
+      } else {
+        compCtx.drawImage(this.layerCanvases[i], 0, 0, w, h);
       }
-      compCtx.drawImage(this.layerCanvases[i], 0, 0, w, h);
-      if (hasMask) compCtx.restore();
     }
     compCtx.globalAlpha = 1;
     compCtx.globalCompositeOperation = 'source-over';
@@ -2652,6 +2837,54 @@ export class LiquidShowVisualizer {
     }
 
     timing.total = performance.now() - drawStart;
+  }
+
+  // Composite a layer through a feathered (blurred-edge) alpha mask instead of a hard clip.
+  // Called with globalAlpha and globalCompositeOperation already set on compCtx.
+  _compositeLayerWithFeather(compCtx, layerCanvas, layer, w, h, feather) {
+    const mode = layer._maskMode ?? 'include';
+
+    // --- Build the mask alpha canvas ---
+    if (!this._featherMaskCanvas) this._featherMaskCanvas = document.createElement('canvas');
+    const mc = this._featherMaskCanvas;
+    if (mc.width !== w || mc.height !== h) { mc.width = w; mc.height = h; }
+    const mCtx = mc.getContext('2d');
+    mCtx.clearRect(0, 0, w, h);
+
+    const path = new Path2D();
+    this._addMaskShapesToPath(path, layer._masks, w, h);
+
+    if (mode === 'include') {
+      // White blurred shapes → alpha fades at edges
+      mCtx.filter = `blur(${feather}px)`;
+      mCtx.fillStyle = '#fff';
+      mCtx.fill(path);
+      mCtx.filter = 'none';
+    } else {
+      // Full white background, then cut blurred holes for excluded regions
+      mCtx.fillStyle = '#fff';
+      mCtx.fillRect(0, 0, w, h);
+      mCtx.filter = `blur(${feather}px)`;
+      mCtx.globalCompositeOperation = 'destination-out';
+      mCtx.fillStyle = '#fff';
+      mCtx.fill(path);
+      mCtx.filter = 'none';
+      mCtx.globalCompositeOperation = 'source-over';
+    }
+
+    // --- Apply the alpha mask to a copy of the layer ---
+    if (!this._featherTmpCanvas) this._featherTmpCanvas = document.createElement('canvas');
+    const tmp = this._featherTmpCanvas;
+    if (tmp.width !== w || tmp.height !== h) { tmp.width = w; tmp.height = h; }
+    const tCtx = tmp.getContext('2d');
+    tCtx.clearRect(0, 0, w, h);
+    tCtx.drawImage(layerCanvas, 0, 0, w, h);
+    tCtx.globalCompositeOperation = 'destination-in';
+    tCtx.drawImage(mc, 0, 0);
+    tCtx.globalCompositeOperation = 'source-over';
+
+    // --- Composite the masked layer (blendMode + globalAlpha already set on compCtx) ---
+    compCtx.drawImage(tmp, 0, 0, w, h);
   }
 
   _postProcess(w, h, audio, timing) {
@@ -2938,6 +3171,20 @@ export class LiquidShowVisualizer {
     if (this._history.length === 0) {
       this._pushHistory();
     }
+
+    // Canvas click → toggle all UI chrome (desktop "clean canvas" mode)
+    this._llUiHidden = false; // always start visible when panel is built
+    if (this._canvasUIClickHandler) {
+      this.canvas.removeEventListener('click', this._canvasUIClickHandler);
+    }
+    this._canvasUIClickHandler = (e) => {
+      // Only respond to clicks directly on the canvas element
+      if (e.target !== this.canvas) return;
+      // Mask edit mode owns canvas clicks; leave them alone
+      if (this._maskEditingLayerIndex >= 0) return;
+      this._toggleLLFullUI();
+    };
+    this.canvas.addEventListener('click', this._canvasUIClickHandler);
   }
 
   destroyPanel() {
@@ -2947,6 +3194,15 @@ export class LiquidShowVisualizer {
     }
     this._destroyMaskToolbar();
     this._detachMaskCanvasHandlers();
+    // Clean up canvas UI-click handler and restore any hidden UI
+    if (this._canvasUIClickHandler) {
+      this.canvas.removeEventListener('click', this._canvasUIClickHandler);
+      this._canvasUIClickHandler = null;
+    }
+    if (this._llUiHidden) {
+      this._llUiHidden = false;
+      this._applyLLUIHidden(false);
+    }
     if (this._controlPanelEl) {
       this._controlPanelEl.classList.remove('ll-active');
       this._controlPanelEl = null;
@@ -3010,6 +3266,7 @@ export class LiquidShowVisualizer {
         spinDir:   SPIN_LAYER_TYPES.has(l.type) ? (l._spinDir   ?? 'cw') : undefined,
         masks: Array.isArray(l._masks) && l._masks.length > 0 ? this._cloneMasks(l._masks) : undefined,
         maskMode: Array.isArray(l._masks) && l._masks.length > 0 ? (l._maskMode ?? 'include') : undefined,
+        maskFeather: (l._maskFeather ?? 0) > 0 ? l._maskFeather : undefined,
       })),
       selectedLayerIndex: this.selectedLayerIndex,
       selectedLayerIndices: [...this.selectedLayerIndices],
@@ -3104,8 +3361,9 @@ export class LiquidShowVisualizer {
         if (saved.spinDir   !== undefined) layer._spinDir   = saved.spinDir;
       }
       // Restore mask params (always set, default to empty)
-      layer._masks    = Array.isArray(saved.masks) ? this._cloneMasks(saved.masks) : [];
-      layer._maskMode = saved.maskMode ?? 'include';
+      layer._masks       = Array.isArray(saved.masks) ? this._cloneMasks(saved.masks) : [];
+      layer._maskMode    = saved.maskMode ?? 'include';
+      layer._maskFeather = saved.maskFeather ?? 0;
       return layer;
     });
 

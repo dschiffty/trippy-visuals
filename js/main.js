@@ -188,7 +188,12 @@ class App {
 
     // Show/hide floating mic button on mobile
     this._updateFloatingMicVisibility();
-    // Reset UI visibility on mode switch
+    // Reset UI visibility on mode switch (mobile and desktop)
+    // Restore any chrome elements that may have been hidden by Liquid Lights
+    for (const cls of ['.title-bar', '.menu-bar', '.status-bar']) {
+      const el = document.querySelector(cls);
+      if (el) el.style.display = '';
+    }
     if (this.isMobile) {
       this._mobileUIHidden = false;
       document.querySelector('.control-panel')?.classList.remove('mobile-ui-hidden', 'll-ui-hidden');
