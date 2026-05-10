@@ -272,6 +272,14 @@ export class LiquidShowVisualizer {
     this._maskPolyDragging = false;    // true while dragging an existing vertex
     this._maskPolyDragSource = null;   // { type:'inprogress'|'mask', maskIdx?, ptIdx }
     this._maskPolyDragWas = false;     // set true when a drag occurred (suppress next click)
+    this._maskSelectedShapeIdx = -1;   // index of the selected mask shape (-1 = none)
+    this._maskShiftKey = false;        // shift key held (constrain rect→square, ellipse→circle)
+    this._maskMoveState = null;        // { maskIdx, startPt, origMasks } during shape move
+    this._maskResizeState = null;      // { maskIdx, handleId, origShape } during resize
+    this._maskLocalHistory = [];       // per-session undo stack (arrays of mask snapshots)
+    this._maskLocalHistoryIdx = -1;    // current position in local history
+    this._maskUndoBtn = null;          // reference for enable/disable
+    this._maskRedoBtn = null;
 
     // Full-UI hide (canvas click to toggle all chrome)
     this._llUiHidden = false;
@@ -2118,6 +2126,136 @@ export class LiquidShowVisualizer {
     }
   }
 
+  // --- Mask shape hit testing & geometry helpers ---
+
+  // Point-in-polygon via ray casting (normalized coords)
+  _pointInPolygon(px, py, points) {
+    let inside = false;
+    const n = points.length;
+    for (let i = 0, j = n - 1; i < n; j = i++) {
+      const xi = points[i][0], yi = points[i][1];
+      const xj = points[j][0], yj = points[j][1];
+      if ((yi > py) !== (yj > py) && px < (xj - xi) * (py - yi) / (yj - yi) + xi) inside = !inside;
+    }
+    return inside;
+  }
+
+  // Test whether normalized point (px, py) lies inside mask shape m
+  _maskShapeHitTest(m, px, py) {
+    if (m.type === 'rect') {
+      const left = Math.min(m.x, m.x + m.w), right  = Math.max(m.x, m.x + m.w);
+      const top  = Math.min(m.y, m.y + m.h), bottom = Math.max(m.y, m.y + m.h);
+      return px >= left && px <= right && py >= top && py <= bottom;
+    }
+    if (m.type === 'ellipse') {
+      const cx = m.x + m.w / 2, cy = m.y + m.h / 2;
+      const rx = Math.abs(m.w / 2), ry = Math.abs(m.h / 2);
+      if (rx < 0.001 || ry < 0.001) return false;
+      return ((px - cx) / rx) ** 2 + ((py - cy) / ry) ** 2 <= 1;
+    }
+    if (m.type === 'freehand' && Array.isArray(m.points) && m.points.length > 2) {
+      return this._pointInPolygon(px, py, m.points);
+    }
+    return false;
+  }
+
+  // Return index of topmost mask shape containing point, or -1
+  _maskFindShapeAtPoint(masks, px, py) {
+    for (let i = masks.length - 1; i >= 0; i--) {
+      if (this._maskShapeHitTest(masks[i], px, py)) return i;
+    }
+    return -1;
+  }
+
+  // Resize handle descriptors for a rect or ellipse (normalized coords)
+  _maskGetHandles(m) {
+    if (m.type !== 'rect' && m.type !== 'ellipse') return [];
+    const left = Math.min(m.x, m.x + m.w), right  = Math.max(m.x, m.x + m.w);
+    const top  = Math.min(m.y, m.y + m.h), bottom = Math.max(m.y, m.y + m.h);
+    const mx = (left + right) / 2, my = (top + bottom) / 2;
+    return [
+      { id: 'tl', nx: left, ny: top    }, { id: 't',  nx: mx,    ny: top    },
+      { id: 'tr', nx: right, ny: top   }, { id: 'r',  nx: right, ny: my     },
+      { id: 'br', nx: right, ny: bottom}, { id: 'b',  nx: mx,    ny: bottom },
+      { id: 'bl', nx: left, ny: bottom }, { id: 'l',  nx: left,  ny: my     },
+    ];
+  }
+
+  // Find which resize handle is within ~8 canvas-px of (px, py), or null
+  _maskFindHandle(m, px, py, cw, ch) {
+    const thresh = 9 / Math.min(cw, ch);
+    for (const h of this._maskGetHandles(m)) {
+      if (Math.hypot(px - h.nx, py - h.ny) < thresh) return h;
+    }
+    return null;
+  }
+
+  // Apply a resize drag to origShape: handle dragged to (px, py), shift = lock aspect ratio
+  _maskApplyResize(origShape, handleId, px, py, shiftKey) {
+    const left0 = Math.min(origShape.x, origShape.x + origShape.w);
+    const right0 = Math.max(origShape.x, origShape.x + origShape.w);
+    const top0   = Math.min(origShape.y, origShape.y + origShape.h);
+    const bot0   = Math.max(origShape.y, origShape.y + origShape.h);
+
+    let left = left0, right = right0, top = top0, bot = bot0;
+    const tl = handleId.includes('l'), tr = handleId.includes('r');
+    const tt = handleId.includes('t'), tb = handleId.includes('b');
+    if (tl) left  = Math.min(px, right0 - 0.005);
+    if (tr) right = Math.max(px, left0  + 0.005);
+    if (tt) top   = Math.min(py, bot0   - 0.005);
+    if (tb) bot   = Math.max(py, top0   + 0.005);
+
+    if (shiftKey && tl !== tr && tt !== tb) { // corner handle
+      const origAR = (right0 - left0) / (bot0 - top0);
+      const newW = right - left, newH = bot - top;
+      if (newW / origAR >= newH) { // width dominates
+        const h2 = newW / origAR;
+        if (tt) top = bot - h2; else bot = top + h2;
+      } else {
+        const w2 = newH * origAR;
+        if (tl) left = right - w2; else right = left + w2;
+      }
+    }
+    return { ...origShape, x: left, y: top, w: right - left, h: bot - top };
+  }
+
+  // --- Mask local undo/redo ---
+
+  _maskHistoryPush() {
+    const layer = this.layers[this._maskEditingLayerIndex];
+    if (!layer) return;
+    // Truncate any redo tail
+    this._maskLocalHistory = this._maskLocalHistory.slice(0, this._maskLocalHistoryIdx + 1);
+    this._maskLocalHistory.push(this._cloneMasks(layer._masks));
+    this._maskLocalHistoryIdx = this._maskLocalHistory.length - 1;
+    this._maskUpdateUndoRedo();
+  }
+
+  _maskHistoryUndo() {
+    if (this._maskLocalHistoryIdx <= 0) return;
+    const layer = this.layers[this._maskEditingLayerIndex];
+    if (!layer) return;
+    this._maskLocalHistoryIdx--;
+    layer._masks = this._cloneMasks(this._maskLocalHistory[this._maskLocalHistoryIdx]);
+    this._maskSelectedShapeIdx = -1;
+    this._maskUpdateUndoRedo();
+  }
+
+  _maskHistoryRedo() {
+    if (this._maskLocalHistoryIdx >= this._maskLocalHistory.length - 1) return;
+    const layer = this.layers[this._maskEditingLayerIndex];
+    if (!layer) return;
+    this._maskLocalHistoryIdx++;
+    layer._masks = this._cloneMasks(this._maskLocalHistory[this._maskLocalHistoryIdx]);
+    this._maskSelectedShapeIdx = -1;
+    this._maskUpdateUndoRedo();
+  }
+
+  _maskUpdateUndoRedo() {
+    if (this._maskUndoBtn) this._maskUndoBtn.disabled = this._maskLocalHistoryIdx <= 0;
+    if (this._maskRedoBtn) this._maskRedoBtn.disabled = this._maskLocalHistoryIdx >= this._maskLocalHistory.length - 1;
+  }
+
   // --- Mask edit mode ---
 
   _enterMaskEditMode(layerIndex) {
@@ -2133,6 +2271,14 @@ export class LiquidShowVisualizer {
     this._maskPolyDragging = false;
     this._maskPolyDragSource = null;
     this._maskPolyDragWas = false;
+    this._maskSelectedShapeIdx = -1;
+    this._maskShiftKey = false;
+    this._maskMoveState = null;
+    this._maskResizeState = null;
+    this._maskLocalHistory = [];
+    this._maskLocalHistoryIdx = -1;
+    // Seed the local history with the current mask state
+    this._maskHistoryPush();
     // Hide the settings panel so the canvas is fully visible while drawing.
     // The mask toolbar is `position:fixed` and stays on top.
     if (this.panelEl && this._maskPanelPrevDisplay === undefined) {
@@ -2161,6 +2307,14 @@ export class LiquidShowVisualizer {
     this._maskPolyDragging = false;
     this._maskPolyDragSource = null;
     this._maskPolyDragWas = false;
+    this._maskSelectedShapeIdx = -1;
+    this._maskShiftKey = false;
+    this._maskMoveState = null;
+    this._maskResizeState = null;
+    this._maskLocalHistory = [];
+    this._maskLocalHistoryIdx = -1;
+    this._maskUndoBtn = null;
+    this._maskRedoBtn = null;
     this._destroyMaskToolbar();
     this._detachMaskCanvasHandlers();
     // Restore the settings panel to whatever display state it had before
@@ -2215,6 +2369,8 @@ export class LiquidShowVisualizer {
     if (!layer || pts.length < 3) return;
     if (!Array.isArray(layer._masks)) layer._masks = [];
     layer._masks.push({ type: 'freehand', points: pts });
+    this._maskSelectedShapeIdx = layer._masks.length - 1;
+    this._maskHistoryPush();
   }
 
   _buildMaskToolbar() {
@@ -2312,6 +2468,8 @@ export class LiquidShowVisualizer {
       layer._masks = [];
       this._maskPolygonPoints = [];
       this._maskPolygonCursor = null;
+      this._maskSelectedShapeIdx = -1;
+      this._maskHistoryPush();
     });
     bar.appendChild(clearBtn);
 
@@ -2319,6 +2477,24 @@ export class LiquidShowVisualizer {
     const sep3 = document.createElement('span');
     sep3.style.cssText = 'width:1px;height:18px;background:#444;margin:0 2px;';
     bar.appendChild(sep3);
+
+    // Undo / Redo
+    const undoBtn = makeBtn('↩ Undo', 'Undo last mask change (Cmd+Z)', false);
+    undoBtn.disabled = true;
+    this._maskUndoBtn = undoBtn;
+    undoBtn.addEventListener('click', () => this._maskHistoryUndo());
+    bar.appendChild(undoBtn);
+
+    const redoBtn = makeBtn('↪ Redo', 'Redo (Cmd+Shift+Z)', false);
+    redoBtn.disabled = true;
+    this._maskRedoBtn = redoBtn;
+    redoBtn.addEventListener('click', () => this._maskHistoryRedo());
+    bar.appendChild(redoBtn);
+
+    // Separator
+    const sep4 = document.createElement('span');
+    sep4.style.cssText = 'width:1px;height:18px;background:#444;margin:0 2px;';
+    bar.appendChild(sep4);
 
     // Feather slider
     const featherLabel = document.createElement('span');
@@ -2382,6 +2558,13 @@ export class LiquidShowVisualizer {
       };
     };
 
+    // Return cursor string for a resize handle id
+    const handleCursor = (id) => {
+      const map = { tl: 'nw-resize', t: 'n-resize', tr: 'ne-resize', r: 'e-resize',
+                    br: 'se-resize', b: 's-resize', bl: 'sw-resize', l: 'w-resize' };
+      return map[id] || 'nw-resize';
+    };
+
     // Helper: find a draggable vertex within threshold of point p
     const findVertex = (p) => {
       const rect = canvas.getBoundingClientRect();
@@ -2413,20 +2596,81 @@ export class LiquidShowVisualizer {
     const onDown = (e) => {
       if (this._maskEditingLayerIndex < 0) return;
       const p = getNorm(e);
+      const layer = this.layers[this._maskEditingLayerIndex];
+      const masks = layer && Array.isArray(layer._masks) ? layer._masks : [];
+      const rect = canvas.getBoundingClientRect();
 
       if (this._maskTool === 'polygon') {
-        // In polygon mode, mousedown checks for vertex drag (not normal shape draw flow)
+        // 1. Vertex drag check (in-progress or completed freehand shapes)
         const hit = findVertex(p);
         if (hit) {
           e.preventDefault();
           this._maskPolyDragging = true;
           this._maskPolyDragSource = hit;
           this._maskPolyDragWas = false;
+          return;
         }
+        // 2. Resize handle on selected shape (rect/ellipse only, even in polygon mode)
+        if (this._maskSelectedShapeIdx >= 0 && this._maskSelectedShapeIdx < masks.length) {
+          const selShape = masks[this._maskSelectedShapeIdx];
+          const h = this._maskFindHandle(selShape, p.x, p.y, rect.width, rect.height);
+          if (h) {
+            e.preventDefault();
+            this._maskResizeState = {
+              maskIdx: this._maskSelectedShapeIdx,
+              handleId: h.id,
+              origShape: { ...selShape },
+            };
+            return;
+          }
+        }
+        // 3. Shape interior → select + move
+        const shapeIdx = this._maskFindShapeAtPoint(masks, p.x, p.y);
+        if (shapeIdx >= 0) {
+          e.preventDefault();
+          this._maskSelectedShapeIdx = shapeIdx;
+          this._maskMoveState = {
+            maskIdx: shapeIdx,
+            startPt: p,
+            origMasks: this._cloneMasks(masks),
+            moved: false,
+          };
+          return;
+        }
+        // 4. Otherwise: let onPolyClick handle vertex placement (fall through)
         return;
       }
 
-      // Non-polygon tools: normal drag-to-draw flow
+      // Non-polygon tools:
+      // 1. Resize handle on selected shape
+      if (this._maskSelectedShapeIdx >= 0 && this._maskSelectedShapeIdx < masks.length) {
+        const selShape = masks[this._maskSelectedShapeIdx];
+        const h = this._maskFindHandle(selShape, p.x, p.y, rect.width, rect.height);
+        if (h) {
+          e.preventDefault();
+          this._maskResizeState = {
+            maskIdx: this._maskSelectedShapeIdx,
+            handleId: h.id,
+            origShape: { ...selShape },
+          };
+          return;
+        }
+      }
+      // 2. Shape interior → select + move
+      const shapeIdx = this._maskFindShapeAtPoint(masks, p.x, p.y);
+      if (shapeIdx >= 0) {
+        e.preventDefault();
+        this._maskSelectedShapeIdx = shapeIdx;
+        this._maskMoveState = {
+          maskIdx: shapeIdx,
+          startPt: p,
+          origMasks: this._cloneMasks(masks),
+          moved: false,
+        };
+        return;
+      }
+      // 3. Deselect + start drawing
+      this._maskSelectedShapeIdx = -1;
       e.preventDefault();
       this._maskDrawStart = p;
       this._maskDrawing = true;
@@ -2438,18 +2682,53 @@ export class LiquidShowVisualizer {
     };
 
     const onMove = (e) => {
-      if (this._maskTool === 'polygon' && this._maskEditingLayerIndex >= 0) {
-        const p = getNorm(e);
+      if (this._maskEditingLayerIndex < 0) return;
+      const p = getNorm(e);
+      const layer = this.layers[this._maskEditingLayerIndex];
+      const masks = layer && Array.isArray(layer._masks) ? layer._masks : [];
+      const rect = canvas.getBoundingClientRect();
+
+      // --- Resize in progress ---
+      if (this._maskResizeState) {
+        e.preventDefault();
+        const rs = this._maskResizeState;
+        if (masks[rs.maskIdx]) {
+          masks[rs.maskIdx] = this._maskApplyResize(rs.origShape, rs.handleId, p.x, p.y, this._maskShiftKey);
+        }
+        return;
+      }
+
+      // --- Move in progress ---
+      if (this._maskMoveState) {
+        e.preventDefault();
+        const ms = this._maskMoveState;
+        const dx = p.x - ms.startPt.x;
+        const dy = p.y - ms.startPt.y;
+        const orig = ms.origMasks[ms.maskIdx];
+        const tgt  = masks[ms.maskIdx];
+        if (orig && tgt) {
+          if (tgt.type === 'rect' || tgt.type === 'ellipse') {
+            tgt.x = orig.x + dx;
+            tgt.y = orig.y + dy;
+          } else if (tgt.type === 'freehand' && Array.isArray(orig.points)) {
+            tgt.points = orig.points.map(([ox, oy]) => [ox + dx, oy + dy]);
+          }
+        }
+        ms.moved = true;
+        canvas.style.cursor = 'grabbing';
+        return;
+      }
+
+      // --- Polygon tool: vertex drag / cursor feedback ---
+      if (this._maskTool === 'polygon') {
         this._maskPolygonCursor = p;
 
-        // Vertex drag
         if (this._maskPolyDragging && this._maskPolyDragSource) {
           e.preventDefault();
           const src = this._maskPolyDragSource;
           if (src.type === 'inprogress') {
             this._maskPolygonPoints[src.ptIdx] = [p.x, p.y];
           } else {
-            const layer = this.layers[this._maskEditingLayerIndex];
             if (layer && layer._masks[src.maskIdx]) {
               layer._masks[src.maskIdx].points[src.ptIdx] = [p.x, p.y];
             }
@@ -2459,41 +2738,90 @@ export class LiquidShowVisualizer {
           return;
         }
 
-        // Update cursor: grab when hovering over a vertex, crosshair otherwise
-        const hit = findVertex(p);
-        canvas.style.cursor = hit ? 'grab' : 'crosshair';
+        // Cursor feedback: handles → vertices → shape interior → crosshair
+        if (this._maskSelectedShapeIdx >= 0 && this._maskSelectedShapeIdx < masks.length) {
+          const sel = masks[this._maskSelectedShapeIdx];
+          const h = this._maskFindHandle(sel, p.x, p.y, rect.width, rect.height);
+          if (h) { canvas.style.cursor = handleCursor(h.id); return; }
+        }
+        const vhit = findVertex(p);
+        if (vhit) { canvas.style.cursor = 'grab'; return; }
+        const si = this._maskFindShapeAtPoint(masks, p.x, p.y);
+        canvas.style.cursor = si >= 0 ? 'move' : 'crosshair';
+        return;
       }
 
-      if (!this._maskDrawing || !this._maskCurrentDraw) return;
-      e.preventDefault();
-      const p = getNorm(e);
-      const m = this._maskCurrentDraw;
-      if (m.type === 'freehand') {
-        const last = m.points[m.points.length - 1];
-        // Throttle: only push if moved at least 0.003 normalized units
-        if (!last || Math.hypot(p.x - last[0], p.y - last[1]) > 0.003) {
-          m.points.push([p.x, p.y]);
+      // --- Drawing in progress ---
+      if (this._maskDrawing && this._maskCurrentDraw) {
+        e.preventDefault();
+        const m = this._maskCurrentDraw;
+        if (m.type === 'freehand') {
+          const last = m.points[m.points.length - 1];
+          if (!last || Math.hypot(p.x - last[0], p.y - last[1]) > 0.003) {
+            m.points.push([p.x, p.y]);
+          }
+        } else {
+          let dw = p.x - this._maskDrawStart.x;
+          let dh = p.y - this._maskDrawStart.y;
+          if (this._maskShiftKey) {
+            // Constrain to square/circle: use the larger absolute delta, preserving sign
+            const dim = Math.max(Math.abs(dw), Math.abs(dh));
+            dw = Math.sign(dw) * dim;
+            dh = Math.sign(dh) * dim;
+          }
+          m.w = dw;
+          m.h = dh;
         }
-      } else {
-        m.w = p.x - this._maskDrawStart.x;
-        m.h = p.y - this._maskDrawStart.y;
+        return;
       }
+
+      // --- Hover cursor feedback (no drag active) ---
+      if (this._maskSelectedShapeIdx >= 0 && this._maskSelectedShapeIdx < masks.length) {
+        const sel = masks[this._maskSelectedShapeIdx];
+        const h = this._maskFindHandle(sel, p.x, p.y, rect.width, rect.height);
+        if (h) { canvas.style.cursor = handleCursor(h.id); return; }
+      }
+      const si = this._maskFindShapeAtPoint(masks, p.x, p.y);
+      canvas.style.cursor = si >= 0 ? 'move' : 'crosshair';
     };
 
     const onUp = (e) => {
+      const layer = this.layers[this._maskEditingLayerIndex];
+
+      // End resize
+      if (this._maskResizeState) {
+        this._maskResizeState = null;
+        canvas.style.cursor = 'crosshair';
+        this._maskHistoryPush();
+        return;
+      }
+
+      // End move
+      if (this._maskMoveState) {
+        const ms = this._maskMoveState;
+        if (ms.moved) {
+          this._maskPolyDragWas = true; // suppress polygon vertex placement
+          this._maskHistoryPush();
+        }
+        this._maskMoveState = null;
+        canvas.style.cursor = 'crosshair';
+        return;
+      }
+
       // End vertex drag (polygon tool)
       if (this._maskPolyDragging) {
         this._maskPolyDragging = false;
         this._maskPolyDragSource = null;
         canvas.style.cursor = 'crosshair';
+        if (layer) this._maskHistoryPush();
         return;
       }
+
       if (!this._maskDrawing) return;
       e?.preventDefault?.();
       this._maskDrawing = false;
       const m = this._maskCurrentDraw;
       this._maskCurrentDraw = null;
-      const layer = this.layers[this._maskEditingLayerIndex];
       if (!layer || !m) return;
       if (m.type === 'rect' || m.type === 'ellipse') {
         // Normalize negative w/h
@@ -2505,16 +2833,20 @@ export class LiquidShowVisualizer {
       }
       if (!Array.isArray(layer._masks)) layer._masks = [];
       layer._masks.push(m);
+      this._maskSelectedShapeIdx = layer._masks.length - 1;
+      this._maskHistoryPush();
     };
 
     // Polygon: click to place vertices, double-click or first-vertex click to close
     const onPolyClick = (e) => {
       if (this._maskTool !== 'polygon' || this._maskEditingLayerIndex < 0) return;
-      // A drag just ended — suppress vertex placement for this click
+      // A drag / move just ended — suppress vertex placement for this click
       if (this._maskPolyDragWas) {
         this._maskPolyDragWas = false;
         return;
       }
+      // A move selection just happened — suppress vertex placement
+      if (this._maskMoveState) return;
       e.preventDefault();
       const p = getNorm(e);
 
@@ -2528,7 +2860,6 @@ export class LiquidShowVisualizer {
       if (this._maskPolygonPoints.length >= 3) {
         const first = this._maskPolygonPoints[0];
         const rect = canvas.getBoundingClientRect();
-        // ~16px proximity threshold in normalized units
         const thresh = 16 / Math.min(rect.width, rect.height);
         if (Math.hypot(p.x - first[0], p.y - first[1]) < thresh) {
           this._closePolygon();
@@ -2540,12 +2871,40 @@ export class LiquidShowVisualizer {
       this._maskPolygonPoints.push([p.x, p.y]);
     };
 
-    // Escape key cancels an in-progress polygon
     const onKeyDown = (e) => {
-      if (e.key === 'Escape' && this._maskTool === 'polygon') {
+      // Shift key → constrain rect/ellipse to square/circle
+      if (e.key === 'Shift') {
+        this._maskShiftKey = true;
+      }
+      // Escape → cancel in-progress polygon
+      if (e.key === 'Escape') {
         this._maskPolygonPoints = [];
         this._maskPolygonCursor = null;
       }
+      // Delete / Backspace → remove selected shape
+      if ((e.key === 'Delete' || e.key === 'Backspace') && this._maskSelectedShapeIdx >= 0) {
+        const layer = this.layers[this._maskEditingLayerIndex];
+        if (layer && Array.isArray(layer._masks)) {
+          layer._masks.splice(this._maskSelectedShapeIdx, 1);
+          this._maskSelectedShapeIdx = -1;
+          this._maskHistoryPush();
+          e.preventDefault();
+        }
+      }
+      // Cmd+Z / Ctrl+Z → undo
+      if ((e.metaKey || e.ctrlKey) && e.key === 'z' && !e.shiftKey) {
+        e.preventDefault();
+        this._maskHistoryUndo();
+      }
+      // Cmd+Shift+Z / Ctrl+Shift+Z → redo
+      if ((e.metaKey || e.ctrlKey) && e.key === 'z' && e.shiftKey) {
+        e.preventDefault();
+        this._maskHistoryRedo();
+      }
+    };
+
+    const onKeyUp = (e) => {
+      if (e.key === 'Shift') this._maskShiftKey = false;
     };
 
     canvas.addEventListener('mousedown',  onDown);
@@ -2553,11 +2912,12 @@ export class LiquidShowVisualizer {
     window.addEventListener('mouseup',    onUp);
     canvas.addEventListener('click',      onPolyClick);
     window.addEventListener('keydown',    onKeyDown);
+    window.addEventListener('keyup',      onKeyUp);
     canvas.addEventListener('touchstart', onDown, { passive: false });
     window.addEventListener('touchmove',  onMove, { passive: false });
     window.addEventListener('touchend',   onUp);
 
-    this._maskCanvasHandlers = { onDown, onMove, onUp, onPolyClick, onKeyDown };
+    this._maskCanvasHandlers = { onDown, onMove, onUp, onPolyClick, onKeyDown, onKeyUp };
   }
 
   _detachMaskCanvasHandlers() {
@@ -2576,6 +2936,7 @@ export class LiquidShowVisualizer {
     window.removeEventListener('mouseup',    h.onUp);
     canvas.removeEventListener('click',      h.onPolyClick);
     window.removeEventListener('keydown',    h.onKeyDown);
+    if (h.onKeyUp) window.removeEventListener('keyup', h.onKeyUp);
     canvas.removeEventListener('touchstart', h.onDown);
     window.removeEventListener('touchmove',  h.onMove);
     window.removeEventListener('touchend',   h.onUp);
@@ -2712,10 +3073,40 @@ export class LiquidShowVisualizer {
       }
     }
 
+    // --- Selection highlight + resize handles for selected shape ---
+    if (this._maskSelectedShapeIdx >= 0 && Array.isArray(layer._masks)) {
+      const selShape = layer._masks[this._maskSelectedShapeIdx];
+      if (selShape) {
+        // Gold solid outline for selected shape
+        const selPath = new Path2D();
+        this._addMaskShapesToPath(selPath, [selShape], w, h);
+        ctx.lineWidth = 2.5;
+        ctx.setLineDash([]);
+        ctx.strokeStyle = 'rgba(255,220,50,0.95)';
+        ctx.stroke(selPath);
+
+        // Resize handles: 8 small squares for rect and ellipse
+        if (selShape.type === 'rect' || selShape.type === 'ellipse') {
+          const handles = this._maskGetHandles(selShape);
+          const hSize = 6; // half-size of handle square in canvas pixels
+          for (const hd of handles) {
+            const hx = hd.nx * w, hy = hd.ny * h;
+            ctx.fillStyle = '#fff';
+            ctx.strokeStyle = '#3478f6';
+            ctx.lineWidth = 1.5;
+            ctx.setLineDash([]);
+            ctx.fillRect(hx - hSize, hy - hSize, hSize * 2, hSize * 2);
+            ctx.strokeRect(hx - hSize, hy - hSize, hSize * 2, hSize * 2);
+          }
+        }
+      }
+    }
+
     // Top-left badge with mode + tool
     ctx.font = 'bold 12px monospace';
     ctx.textBaseline = 'top';
-    const badge = `MASK EDIT — ${mode.toUpperCase()} | tool: ${this._maskTool}`;
+    const selHint = this._maskSelectedShapeIdx >= 0 ? ' | ⌫ delete · drag to move' : '';
+    const badge = `MASK EDIT — ${mode.toUpperCase()} | tool: ${this._maskTool}${selHint}`;
     const tw = ctx.measureText(badge).width;
     ctx.fillStyle = 'rgba(0,0,0,0.7)';
     ctx.fillRect(8, 8, tw + 16, 22);
