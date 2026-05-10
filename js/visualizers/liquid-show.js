@@ -2693,7 +2693,7 @@ export class LiquidShowVisualizer {
         e.preventDefault();
         const rs = this._maskResizeState;
         if (masks[rs.maskIdx]) {
-          masks[rs.maskIdx] = this._maskApplyResize(rs.origShape, rs.handleId, p.x, p.y, this._maskShiftKey);
+          masks[rs.maskIdx] = this._maskApplyResize(rs.origShape, rs.handleId, p.x, p.y, e.shiftKey);
         }
         return;
       }
@@ -2763,7 +2763,7 @@ export class LiquidShowVisualizer {
         } else {
           let dw = p.x - this._maskDrawStart.x;
           let dh = p.y - this._maskDrawStart.y;
-          if (this._maskShiftKey) {
+          if (e.shiftKey) {
             // Constrain to square/circle: use the larger absolute delta, preserving sign
             const dim = Math.max(Math.abs(dw), Math.abs(dh));
             dw = Math.sign(dw) * dim;
@@ -2872,10 +2872,6 @@ export class LiquidShowVisualizer {
     };
 
     const onKeyDown = (e) => {
-      // Shift key → constrain rect/ellipse to square/circle
-      if (e.key === 'Shift') {
-        this._maskShiftKey = true;
-      }
       // Escape → cancel in-progress polygon
       if (e.key === 'Escape') {
         this._maskPolygonPoints = [];
@@ -2903,9 +2899,7 @@ export class LiquidShowVisualizer {
       }
     };
 
-    const onKeyUp = (e) => {
-      if (e.key === 'Shift') this._maskShiftKey = false;
-    };
+    const onKeyUp = (e) => { /* reserved for future use */ };
 
     canvas.addEventListener('mousedown',  onDown);
     window.addEventListener('mousemove',  onMove);
