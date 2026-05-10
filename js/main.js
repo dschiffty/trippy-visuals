@@ -831,8 +831,12 @@ class App {
 
   // Toggle off if already connected; otherwise show the two-option picker.
   connectAudio(anchorEl) {
-    if (this.mic.active) { this.stopMic(); return; }
-    if (this.audio.isCapturing) { this.stopCapture(); return; }
+    // Idle state: open picker to choose a source
+    this._showConnectPicker(anchorEl);
+  }
+
+  // Open the picker even when audio is already active (switch sources without disconnecting first)
+  switchAudio(anchorEl) {
     this._showConnectPicker(anchorEl);
   }
 
@@ -849,24 +853,30 @@ class App {
 
     // Mic option
     const micBtn = document.createElement('button');
-    micBtn.className = 'll-connect-option';
+    micBtn.className = 'll-connect-option' + (this.mic.active ? ' ll-connect-option-current' : '');
     micBtn.innerHTML = '<span class="ll-connect-icon">🎤</span>'
-      + '<span class="ll-connect-label">Mic Input</span>';
+      + '<span class="ll-connect-label">Mic Input</span>'
+      + (this.mic.active ? '<span class="ll-connect-active-dot">●</span>' : '');
     micBtn.addEventListener('click', async () => {
       this._dismissConnectPicker();
-      await this.startMic();
+      // Stop whichever source is currently active before switching
+      if (this.audio.isCapturing) this.stopCapture();
+      if (!this.mic.active) await this.startMic();
     });
     picker.appendChild(micBtn);
 
     // System Audio option
     const sysBtn = document.createElement('button');
-    sysBtn.className = 'll-connect-option';
+    sysBtn.className = 'll-connect-option' + (this.audio.isCapturing ? ' ll-connect-option-current' : '');
     sysBtn.innerHTML = '<span class="ll-connect-icon">🖥</span>'
       + '<div><div class="ll-connect-label">System Audio</div>'
-      + '<div class="ll-connect-option-note">Chrome will ask to share your screen</div></div>';
+      + '<div class="ll-connect-option-note">Chrome will ask to share your screen</div></div>'
+      + (this.audio.isCapturing ? '<span class="ll-connect-active-dot">●</span>' : '');
     sysBtn.addEventListener('click', async () => {
       this._dismissConnectPicker();
-      await this.startCapture();
+      // Stop whichever source is currently active before switching
+      if (this.mic.active) this.stopMic();
+      if (!this.audio.isCapturing) await this.startCapture();
     });
     picker.appendChild(sysBtn);
 
@@ -910,28 +920,18 @@ class App {
     }
   }
 
-  // Single source of truth for audio status labels — updates status bar
-  // and the LL panel connect button whenever audio state changes.
+  // Single source of truth for audio status — updates status bar, LL panel
+  // section, and floating mic button whenever audio state changes.
   _updateAudioStatus() {
-    let label, active;
     if (this.mic.active) {
-      label = '🎤 Mic Connected';
-      active = true;
       this.statusText.textContent = 'Mic connected';
     } else if (this.audio.isCapturing) {
-      label = '🖥 System Audio';
-      active = true;
       this.statusText.textContent = 'System audio';
     } else {
-      label = '🎙 Connect Audio';
-      active = false;
       this.statusText.textContent = 'Demo mode';
     }
-    // Update LL panel connect button if one is registered
-    if (this._llConnectBtn) {
-      this._llConnectBtn.textContent = label;
-      this._llConnectBtn.classList.toggle('ll-connect-active', active);
-    }
+    // Re-render the LL panel audio section if it registered a render callback
+    this._llAudioStatusUpdate?.();
     // Sync floating mic button active state
     if (this._floatingMicBtn) {
       this._floatingMicBtn.classList.toggle('mic-active', this.mic.active || this.audio.isCapturing);

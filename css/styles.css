@@ -1604,39 +1604,95 @@ html, body {
   cursor: default;
 }
 
-/* ---- Connect Audio button (LL panel Environment section) ---- */
-.ll-connect-row {
-  margin-top: 6px;
-  padding-top: 4px;
-  border-top: 1px solid rgba(255,255,255,0.1);
+/* ---- Audio source widget (LL panel Environment section) ---- */
+
+/* Container sits at the top of the Environment section */
+.ll-audio-source-section {
+  margin-bottom: 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(255,255,255,0.1);
 }
-.ll-connect-btn {
+
+/* Idle state: prominent CTA button */
+.ll-audio-connect-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
   width: 100%;
-  padding: 5px 10px;
+  padding: 8px 12px;
+  font-size: 12px;
+  font-family: monospace;
+  font-weight: bold;
+  background: linear-gradient(135deg, #1a6b4a 0%, #1d5fa0 100%);
+  border: 1px solid rgba(80,200,160,0.45);
+  border-radius: 5px;
+  color: #c8f0e0;
+  cursor: pointer;
+  letter-spacing: 0.04em;
+  transition: filter 0.15s, border-color 0.15s;
+}
+.ll-audio-connect-btn:hover {
+  filter: brightness(1.18);
+  border-color: rgba(100,220,180,0.65);
+  color: #e0fff4;
+}
+.ll-audio-connect-icon { font-size: 14px; }
+
+/* Active state: status row */
+.ll-audio-status-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 2px 5px;
+}
+.ll-audio-status-dot {
+  font-size: 9px;
+  color: #4cdc90;
+  animation: ll-pulse-dot 2s ease-in-out infinite;
+}
+@keyframes ll-pulse-dot {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.4; }
+}
+.ll-audio-status-label {
   font-size: 11px;
   font-family: monospace;
   font-weight: bold;
-  background: rgba(255,255,255,0.08);
+  color: #5ddfaa;
+  letter-spacing: 0.03em;
+}
+
+/* Active state: Switch / Disconnect button row */
+.ll-audio-action-row {
+  display: flex;
+  gap: 5px;
+}
+.ll-audio-action-btn {
+  flex: 1;
+  padding: 4px 6px;
+  font-size: 10px;
+  font-family: monospace;
+  font-weight: bold;
+  background: rgba(255,255,255,0.07);
   border: 1px solid rgba(255,255,255,0.18);
   border-radius: 4px;
-  color: #ccc;
+  color: #bbb;
   cursor: pointer;
-  transition: background 0.15s, color 0.15s, border-color 0.15s;
-  text-align: left;
-  letter-spacing: 0.02em;
+  transition: background 0.12s, color 0.12s;
 }
-.ll-connect-btn:hover {
+.ll-audio-action-btn:hover {
   background: rgba(255,255,255,0.14);
   color: #fff;
-  border-color: rgba(255,255,255,0.3);
 }
-.ll-connect-btn.ll-connect-active {
-  background: rgba(52,120,246,0.22);
-  border-color: rgba(52,120,246,0.55);
-  color: #7eb8ff;
+.ll-audio-disconnect-btn {
+  color: #e08080;
+  border-color: rgba(200,80,80,0.3);
 }
-.ll-connect-btn.ll-connect-active:hover {
-  background: rgba(52,120,246,0.32);
+.ll-audio-disconnect-btn:hover {
+  background: rgba(200,80,80,0.18);
+  color: #ffaaaa;
+  border-color: rgba(200,80,80,0.55);
 }
 
 /* ---- Connect Audio picker (popover) ---- */

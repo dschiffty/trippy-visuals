@@ -3612,8 +3612,8 @@ export class LiquidShowVisualizer {
     this._panelKnobs = [];
     this._globalKnobs = [];
     this._bwKnobs = [];
-    // Clear the app's reference to our connect button so it doesn't call into a detached node
-    if (this._app?._llConnectBtn) this._app._llConnectBtn = null;
+    // Clear the app's render callback so it doesn't write into detached DOM nodes
+    if (this._app) this._app._llAudioStatusUpdate = null;
     this._app = null;
   }
 
@@ -5077,6 +5077,71 @@ export class LiquidShowVisualizer {
     header.textContent = 'Environment';
     container.appendChild(header);
 
+    // --- Audio source widget (top of Environment, most prominent item) ---
+    if (this._app) {
+      const app = this._app;
+      const section = document.createElement('div');
+      section.className = 'll-audio-source-section';
+
+      const render = () => {
+        section.innerHTML = '';
+        const micActive = app.mic?.active;
+        const sysActive = app.audio?.isCapturing;
+
+        if (micActive || sysActive) {
+          // Active state: source label + Switch / Disconnect actions
+          const statusRow = document.createElement('div');
+          statusRow.className = 'll-audio-status-row';
+
+          const dot = document.createElement('span');
+          dot.className = 'll-audio-status-dot';
+          dot.textContent = '●';
+
+          const lbl = document.createElement('span');
+          lbl.className = 'll-audio-status-label';
+          lbl.textContent = micActive ? 'Mic Active' : 'System Audio Active';
+
+          statusRow.appendChild(dot);
+          statusRow.appendChild(lbl);
+          section.appendChild(statusRow);
+
+          const btnRow = document.createElement('div');
+          btnRow.className = 'll-audio-action-row';
+
+          const switchBtn = document.createElement('button');
+          switchBtn.className = 'll-audio-action-btn';
+          switchBtn.textContent = '⇄ Switch';
+          switchBtn.title = 'Switch to a different audio source';
+          switchBtn.addEventListener('click', () => app.switchAudio(switchBtn));
+
+          const disconnectBtn = document.createElement('button');
+          disconnectBtn.className = 'll-audio-action-btn ll-audio-disconnect-btn';
+          disconnectBtn.textContent = '✕ Disconnect';
+          disconnectBtn.title = 'Disconnect audio and return to demo mode';
+          disconnectBtn.addEventListener('click', () => {
+            if (app.mic?.active) app.stopMic();
+            else if (app.audio?.isCapturing) app.stopCapture();
+          });
+
+          btnRow.appendChild(switchBtn);
+          btnRow.appendChild(disconnectBtn);
+          section.appendChild(btnRow);
+        } else {
+          // Idle state: single prominent CTA button
+          const connectBtn = document.createElement('button');
+          connectBtn.className = 'll-audio-connect-btn';
+          connectBtn.innerHTML = '<span class="ll-audio-connect-icon">🎙</span> Connect Audio';
+          connectBtn.title = 'Connect microphone or system audio to audio-reactive layers';
+          connectBtn.addEventListener('click', () => app.connectAudio(connectBtn));
+          section.appendChild(connectBtn);
+        }
+      };
+
+      render();
+      app._llAudioStatusUpdate = render;
+      container.appendChild(section);
+    }
+
     const knobsRow = document.createElement('div');
     knobsRow.className = 'll-knobs-row';
 
@@ -5132,30 +5197,6 @@ export class LiquidShowVisualizer {
     });
     bwRow.appendChild(bwKnobsDiv);
     container.appendChild(bwRow);
-
-    // Connect Audio button — shows current audio source; click to connect/disconnect
-    if (this._app) {
-      const connectRow = document.createElement('div');
-      connectRow.className = 'll-connect-row';
-
-      const app = this._app;
-      const hasAudio = app.mic?.active || app.audio?.isCapturing;
-      const label = app.mic?.active    ? '🎤 Mic Connected'
-                  : app.audio?.isCapturing ? '🖥 System Audio'
-                  : '🎙 Connect Audio';
-
-      const connectBtn = document.createElement('button');
-      connectBtn.className = 'll-connect-btn' + (hasAudio ? ' ll-connect-active' : '');
-      connectBtn.textContent = label;
-      connectBtn.title = 'Connect microphone or system audio input to audio-reactive layers';
-      connectBtn.addEventListener('click', () => app.connectAudio(connectBtn));
-
-      // Register with the app so _updateAudioStatus() can reach it
-      app._llConnectBtn = connectBtn;
-
-      connectRow.appendChild(connectBtn);
-      container.appendChild(connectRow);
-    }
   }
 
   // --- UI Helpers ---
