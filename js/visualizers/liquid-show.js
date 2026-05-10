@@ -266,6 +266,7 @@ export class LiquidShowVisualizer {
     this._maskCurrentDraw = null;   // in-progress shape preview
     this._maskToolbarEl = null;
     this._maskCanvasHandlers = null;
+    this._maskPanelPrevDisplay = undefined; // saved panel.style.display while editing
   }
 
   // --- Layer Creation ---
@@ -2111,9 +2112,16 @@ export class LiquidShowVisualizer {
     this._maskEditingLayerIndex = layerIndex;
     this._maskDrawing = false;
     this._maskCurrentDraw = null;
+    // Hide the settings panel so the canvas is fully visible while drawing.
+    // The mask toolbar is `position:fixed` and stays on top.
+    if (this.panelEl && this._maskPanelPrevDisplay === undefined) {
+      this._maskPanelPrevDisplay = this.panelEl.style.display || '';
+      this.panelEl.style.display = 'none';
+    }
     this._buildMaskToolbar();
     this._attachMaskCanvasHandlers();
-    this._rebuildLayerKnobs();
+    // Note: _rebuildLayerKnobs not needed here — panel is hidden.
+    // It will be rebuilt when we restore on exit.
   }
 
   _exitMaskEditMode() {
@@ -2122,6 +2130,11 @@ export class LiquidShowVisualizer {
     this._maskCurrentDraw = null;
     this._destroyMaskToolbar();
     this._detachMaskCanvasHandlers();
+    // Restore the settings panel to whatever display state it had before
+    if (this.panelEl && this._maskPanelPrevDisplay !== undefined) {
+      this.panelEl.style.display = this._maskPanelPrevDisplay;
+      this._maskPanelPrevDisplay = undefined;
+    }
     this._rebuildLayerList();
     this._rebuildLayerKnobs();
     this._pushHistory();
