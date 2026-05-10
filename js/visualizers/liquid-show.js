@@ -3395,8 +3395,9 @@ export class LiquidShowVisualizer {
   // Custom Panel UI
   // ============================================
 
-  buildPanel(controlPanelEl) {
+  buildPanel(controlPanelEl, app) {
     this.destroyPanel();
+    this._app = app || null;
 
     // Randomize everything on first visit this session
     if (!this._hasInitialized) {
@@ -3611,6 +3612,9 @@ export class LiquidShowVisualizer {
     this._panelKnobs = [];
     this._globalKnobs = [];
     this._bwKnobs = [];
+    // Clear the app's reference to our connect button so it doesn't call into a detached node
+    if (this._app?._llConnectBtn) this._app._llConnectBtn = null;
+    this._app = null;
   }
 
   _makeBtn(text, title) {
@@ -5128,6 +5132,30 @@ export class LiquidShowVisualizer {
     });
     bwRow.appendChild(bwKnobsDiv);
     container.appendChild(bwRow);
+
+    // Connect Audio button — shows current audio source; click to connect/disconnect
+    if (this._app) {
+      const connectRow = document.createElement('div');
+      connectRow.className = 'll-connect-row';
+
+      const app = this._app;
+      const hasAudio = app.mic?.active || app.audio?.isCapturing;
+      const label = app.mic?.active    ? '🎤 Mic Connected'
+                  : app.audio?.isCapturing ? '🖥 System Audio'
+                  : '🎙 Connect Audio';
+
+      const connectBtn = document.createElement('button');
+      connectBtn.className = 'll-connect-btn' + (hasAudio ? ' ll-connect-active' : '');
+      connectBtn.textContent = label;
+      connectBtn.title = 'Connect microphone or system audio input to audio-reactive layers';
+      connectBtn.addEventListener('click', () => app.connectAudio(connectBtn));
+
+      // Register with the app so _updateAudioStatus() can reach it
+      app._llConnectBtn = connectBtn;
+
+      connectRow.appendChild(connectBtn);
+      container.appendChild(connectRow);
+    }
   }
 
   // --- UI Helpers ---

@@ -120,6 +120,13 @@ class App {
     if (new URLSearchParams(window.location.search).get('debug') === 'true') {
       this._setupDebugHUD();
     }
+
+    // Start in demo mode immediately — no audio prompt on load
+    this.overlay.classList.add('hidden');
+    this.statusText.textContent = 'Demo mode';
+
+    // Silently check if mic permission was already granted and auto-connect
+    setTimeout(() => this._checkMicPermissionOnLoad(), 1000);
   }
 
   /* ---- Controls ---- */
@@ -338,14 +345,9 @@ class App {
     // Menu bar open/close
     this.setupMenuBar();
 
-    // Audio stop callback
+    // Audio stop callback — fall back to demo mode gracefully, no overlay
     this.audio.onStop = () => {
-      this.overlay.classList.remove('hidden');
-      this.statusText.textContent = 'Capture ended';
-      if (this.animationId) {
-        cancelAnimationFrame(this.animationId);
-        this.animationId = null;
-      }
+      this._updateAudioStatus();
     };
   }
 
@@ -395,26 +397,19 @@ class App {
 
   async startCapture() {
     try {
-      this.statusText.textContent = 'Starting capture...';
+      this.statusText.textContent = 'Connecting...';
       await this.audio.start();
-      this.overlay.classList.add('hidden');
-      this.statusText.textContent = 'Capturing audio';
-      this.activeVisualizer.reset();
-      // Animation loop is already running from startup; no need to restart
-      if (!this.animationId) this.startAnimation();
+      this._updateAudioStatus();
     } catch (err) {
-      this.statusText.textContent = err.message || 'Capture failed';
+      // User dismissed the screen-share dialogue or denied permission —
+      // return silently to demo mode with no error state.
+      this._updateAudioStatus();
     }
   }
 
   stopCapture() {
     this.audio.stop();
-    this.overlay.classList.remove('hidden');
-    this.statusText.textContent = 'Stopped';
-    // Keep animation loop running so the visual demo plays behind the overlay
-    if (!this.animationId) {
-      this.startAnimation();
-    }
+    this._updateAudioStatus();
   }
 
   /* ---- Animation ---- */
@@ -655,7 +650,7 @@ class App {
     };
     const endPress = () => {
       clearTimeout(longPressTimer);
-      if (!didLongPress) this.toggleMic();
+      if (!didLongPress) this.connectAudio(btn);
     };
     const cancelPress = () => { clearTimeout(longPressTimer); };
     btn.addEventListener('touchstart', startPress, { passive: true });
@@ -823,11 +818,137 @@ class App {
     else this.mic.onStateChange?.(state);
     // Notify floating mic button
     this._floatingMicStateChange?.(state);
+    // Sync all audio status indicators
+    this._updateAudioStatus();
   }
 
   setMicGain(value) {
     this.mic.gainValue = value;
     if (this.mic.gainNode) this.mic.gainNode.gain.value = value;
+  }
+
+  /* ---- Connect Audio (unified entry point for Mic + System Audio) ---- */
+
+  // Toggle off if already connected; otherwise show the two-option picker.
+  connectAudio(anchorEl) {
+    if (this.mic.active) { this.stopMic(); return; }
+    if (this.audio.isCapturing) { this.stopCapture(); return; }
+    this._showConnectPicker(anchorEl);
+  }
+
+  _showConnectPicker(anchorEl) {
+    this._dismissConnectPicker();
+
+    const picker = document.createElement('div');
+    picker.className = 'll-connect-picker';
+
+    const title = document.createElement('div');
+    title.className = 'll-connect-picker-title';
+    title.textContent = 'Connect Audio';
+    picker.appendChild(title);
+
+    // Mic option
+    const micBtn = document.createElement('button');
+    micBtn.className = 'll-connect-option';
+    micBtn.innerHTML = '<span class="ll-connect-icon">🎤</span>'
+      + '<span class="ll-connect-label">Mic Input</span>';
+    micBtn.addEventListener('click', async () => {
+      this._dismissConnectPicker();
+      await this.startMic();
+    });
+    picker.appendChild(micBtn);
+
+    // System Audio option
+    const sysBtn = document.createElement('button');
+    sysBtn.className = 'll-connect-option';
+    sysBtn.innerHTML = '<span class="ll-connect-icon">🖥</span>'
+      + '<div><div class="ll-connect-label">System Audio</div>'
+      + '<div class="ll-connect-option-note">Chrome will ask to share your screen</div></div>';
+    sysBtn.addEventListener('click', async () => {
+      this._dismissConnectPicker();
+      await this.startCapture();
+    });
+    picker.appendChild(sysBtn);
+
+    document.body.appendChild(picker);
+    this._connectPicker = picker;
+
+    // Position the picker above or below the anchor button
+    if (anchorEl) {
+      const r = anchorEl.getBoundingClientRect();
+      const ph = picker.offsetHeight || 120;
+      const spaceBelow = window.innerHeight - r.bottom;
+      if (spaceBelow >= ph + 8 || spaceBelow > r.top) {
+        picker.style.top  = (r.bottom + 4) + 'px';
+      } else {
+        picker.style.top  = Math.max(8, r.top - ph - 4) + 'px';
+      }
+      // Clamp horizontally so it doesn't go off-screen
+      const pw = picker.offsetWidth || 220;
+      const left = Math.min(r.left, window.innerWidth - pw - 8);
+      picker.style.left = Math.max(8, left) + 'px';
+    }
+
+    // Click-outside dismisses
+    setTimeout(() => {
+      this._connectPickerDismiss = (e) => {
+        if (!picker.contains(e.target) && e.target !== anchorEl && !anchorEl?.contains(e.target)) {
+          this._dismissConnectPicker();
+        }
+      };
+      document.addEventListener('click', this._connectPickerDismiss, true);
+      document.addEventListener('touchstart', this._connectPickerDismiss, { capture: true, passive: true });
+    }, 10);
+  }
+
+  _dismissConnectPicker() {
+    if (this._connectPicker) { this._connectPicker.remove(); this._connectPicker = null; }
+    if (this._connectPickerDismiss) {
+      document.removeEventListener('click', this._connectPickerDismiss, true);
+      document.removeEventListener('touchstart', this._connectPickerDismiss, true);
+      this._connectPickerDismiss = null;
+    }
+  }
+
+  // Single source of truth for audio status labels — updates status bar
+  // and the LL panel connect button whenever audio state changes.
+  _updateAudioStatus() {
+    let label, active;
+    if (this.mic.active) {
+      label = '🎤 Mic Connected';
+      active = true;
+      this.statusText.textContent = 'Mic connected';
+    } else if (this.audio.isCapturing) {
+      label = '🖥 System Audio';
+      active = true;
+      this.statusText.textContent = 'System audio';
+    } else {
+      label = '🎙 Connect Audio';
+      active = false;
+      this.statusText.textContent = 'Demo mode';
+    }
+    // Update LL panel connect button if one is registered
+    if (this._llConnectBtn) {
+      this._llConnectBtn.textContent = label;
+      this._llConnectBtn.classList.toggle('ll-connect-active', active);
+    }
+    // Sync floating mic button active state
+    if (this._floatingMicBtn) {
+      this._floatingMicBtn.classList.toggle('mic-active', this.mic.active || this.audio.isCapturing);
+    }
+  }
+
+  // On load: silently check if mic was previously granted and auto-connect.
+  // System audio always requires a manual click per session.
+  async _checkMicPermissionOnLoad() {
+    try {
+      const result = await navigator.permissions.query({ name: 'microphone' });
+      if (result.state === 'granted') {
+        await this.startMic();
+      }
+    } catch (_) {
+      // Permissions API not available (Firefox private mode, etc.) — ignore silently
+    }
   }
 
   /* ---- Debug HUD ---- */
