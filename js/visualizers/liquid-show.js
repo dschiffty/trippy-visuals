@@ -257,6 +257,15 @@ export class LiquidShowVisualizer {
 
     // First-visit randomization flag
     this._hasInitialized = false;
+
+    // --- Mask editor state ---
+    this._maskEditingLayerIndex = -1;
+    this._maskTool = 'rect';        // 'rect' | 'ellipse' | 'freehand'
+    this._maskDrawing = false;
+    this._maskDrawStart = null;     // { x, y } in normalized 0-1 coords
+    this._maskCurrentDraw = null;   // in-progress shape preview
+    this._maskToolbarEl = null;
+    this._maskCanvasHandlers = null;
   }
 
   // --- Layer Creation ---
@@ -289,6 +298,10 @@ export class LiquidShowVisualizer {
       colorMode: overrides.colorMode || 'color',
       hue: overrides.hue ?? Math.random() * 360,
       offset: { x: Math.random() * 1000, y: Math.random() * 1000 },
+      // Mask system: array of shapes (rect/ellipse/freehand) in normalized 0-1 coords.
+      // Stored as array to allow future multi-mask support without data migration.
+      _masks: [],
+      _maskMode: 'include', // 'include' (render only inside) or 'exclude' (render everywhere except)
     };
   }
 
@@ -330,6 +343,8 @@ export class LiquidShowVisualizer {
         lightDuration:  l.type === 'lightning' ? (l._lightDuration  ?? 0.4) : undefined,
         spinSpeed: SPIN_LAYER_TYPES.has(l.type) ? (l._spinSpeed ?? 0) : undefined,
         spinDir:   SPIN_LAYER_TYPES.has(l.type) ? (l._spinDir   ?? 'cw') : undefined,
+        masks: Array.isArray(l._masks) && l._masks.length > 0 ? this._cloneMasks(l._masks) : undefined,
+        maskMode: Array.isArray(l._masks) && l._masks.length > 0 ? (l._maskMode ?? 'include') : undefined,
       })),
       selectedLayerIndex: this.selectedLayerIndex,
       soloLayerIndex: this.soloLayerIndex,
@@ -342,6 +357,11 @@ export class LiquidShowVisualizer {
   setState(state) {
     if (!state) return;
     this._hasInitialized = true;
+
+    // Exit mask edit mode before swapping layers — indices may no longer be valid
+    if (this._maskEditingLayerIndex >= 0) {
+      this._exitMaskEditMode();
+    }
 
     // Restore layers
     if (state.layers && Array.isArray(state.layers)) {
@@ -401,6 +421,13 @@ export class LiquidShowVisualizer {
           if (saved.spinSpeed !== undefined) layer._spinSpeed = saved.spinSpeed;
           if (saved.spinDir   !== undefined) layer._spinDir   = saved.spinDir;
         }
+        // Restore mask params
+        if (Array.isArray(saved.masks)) {
+          layer._masks = this._cloneMasks(saved.masks);
+        } else {
+          layer._masks = [];
+        }
+        layer._maskMode = saved.maskMode ?? 'include';
         return layer;
       });
     }
@@ -2017,6 +2044,372 @@ export class LiquidShowVisualizer {
     return layer.visible && layer.params.opacity > 0.01;
   }
 
+  // --- Mask helpers ---
+
+  _cloneMasks(masks) {
+    if (!Array.isArray(masks)) return [];
+    return masks.map(m => {
+      const o = { type: m.type };
+      if (m.type === 'rect' || m.type === 'ellipse') {
+        o.x = m.x; o.y = m.y; o.w = m.w; o.h = m.h;
+      } else if (m.type === 'freehand' && Array.isArray(m.points)) {
+        o.points = m.points.map(p => [p[0], p[1]]);
+      }
+      return o;
+    });
+  }
+
+  _layerHasActiveMask(layer) {
+    return Array.isArray(layer._masks) && layer._masks.length > 0;
+  }
+
+  // Add the union of all mask shapes (in normalized coords) to a Path2D, scaled to (w,h)
+  _addMaskShapesToPath(path, masks, w, h) {
+    if (!Array.isArray(masks)) return;
+    for (const m of masks) {
+      if (m.type === 'rect') {
+        path.rect(m.x * w, m.y * h, m.w * w, m.h * h);
+      } else if (m.type === 'ellipse') {
+        const cx = (m.x + m.w / 2) * w;
+        const cy = (m.y + m.h / 2) * h;
+        const rx = Math.max(0, Math.abs(m.w / 2) * w);
+        const ry = Math.max(0, Math.abs(m.h / 2) * h);
+        if (rx > 0 && ry > 0) path.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+      } else if (m.type === 'freehand' && Array.isArray(m.points) && m.points.length > 1) {
+        path.moveTo(m.points[0][0] * w, m.points[0][1] * h);
+        for (let i = 1; i < m.points.length; i++) {
+          path.lineTo(m.points[i][0] * w, m.points[i][1] * h);
+        }
+        path.closePath();
+      }
+    }
+  }
+
+  // Apply the layer's mask as a clipping region on the given ctx.
+  // Caller must ctx.save() before and ctx.restore() after.
+  _applyMaskClip(ctx, layer, w, h) {
+    const path = new Path2D();
+    if ((layer._maskMode ?? 'include') === 'exclude') {
+      // Render everywhere EXCEPT inside the masks.
+      // Outer rect + inner shapes with even-odd fill creates a hole-punched clip.
+      path.rect(0, 0, w, h);
+      this._addMaskShapesToPath(path, layer._masks, w, h);
+      ctx.clip(path, 'evenodd');
+    } else {
+      this._addMaskShapesToPath(path, layer._masks, w, h);
+      ctx.clip(path);
+    }
+  }
+
+  // --- Mask edit mode ---
+
+  _enterMaskEditMode(layerIndex) {
+    if (layerIndex < 0 || layerIndex >= this.layers.length) return;
+    const layer = this.layers[layerIndex];
+    if (!Array.isArray(layer._masks)) layer._masks = [];
+    if (!layer._maskMode) layer._maskMode = 'include';
+    this._maskEditingLayerIndex = layerIndex;
+    this._maskDrawing = false;
+    this._maskCurrentDraw = null;
+    this._buildMaskToolbar();
+    this._attachMaskCanvasHandlers();
+    this._rebuildLayerKnobs();
+  }
+
+  _exitMaskEditMode() {
+    this._maskEditingLayerIndex = -1;
+    this._maskDrawing = false;
+    this._maskCurrentDraw = null;
+    this._destroyMaskToolbar();
+    this._detachMaskCanvasHandlers();
+    this._rebuildLayerList();
+    this._rebuildLayerKnobs();
+    this._pushHistory();
+  }
+
+  _buildMaskToolbar() {
+    this._destroyMaskToolbar();
+    const layer = this.layers[this._maskEditingLayerIndex];
+    if (!layer) return;
+
+    const bar = document.createElement('div');
+    bar.className = 'll-mask-toolbar';
+    bar.style.cssText = [
+      'position:fixed;left:50%;top:16px;transform:translateX(-50%);',
+      'display:flex;gap:6px;align-items:center;',
+      'background:rgba(15,15,18,0.92);border:1px solid #444;border-radius:8px;',
+      'padding:6px 10px;z-index:10000;',
+      'font-family:monospace;color:#eee;box-shadow:0 4px 16px rgba(0,0,0,0.5);',
+      'user-select:none;',
+    ].join('');
+
+    const title = document.createElement('span');
+    title.textContent = `🎭 Mask: Layer ${this._maskEditingLayerIndex + 1}`;
+    title.style.cssText = 'font-size:11px;font-weight:bold;margin-right:6px;';
+    bar.appendChild(title);
+
+    const makeBtn = (label, title, active) => {
+      const b = document.createElement('button');
+      b.className = 'll-toggle' + (active ? ' active' : '');
+      b.textContent = label;
+      b.title = title;
+      b.style.cssText = 'padding:4px 8px;font-size:11px;';
+      return b;
+    };
+
+    // Tool buttons
+    const tools = [
+      ['rect',     '▭ Rect',     'Drag to draw a rectangle mask'],
+      ['ellipse',  '◯ Ellipse',  'Drag to draw an ellipse mask'],
+      ['freehand', '✏ Freehand', 'Drag to draw a freehand region'],
+    ];
+    const toolBtns = {};
+    tools.forEach(([key, label, tip]) => {
+      const b = makeBtn(label, tip, this._maskTool === key);
+      b.addEventListener('click', () => {
+        this._maskTool = key;
+        Object.values(toolBtns).forEach(bb => bb.classList.remove('active'));
+        b.classList.add('active');
+      });
+      toolBtns[key] = b;
+      bar.appendChild(b);
+    });
+
+    // Separator
+    const sep1 = document.createElement('span');
+    sep1.style.cssText = 'width:1px;height:18px;background:#444;margin:0 2px;';
+    bar.appendChild(sep1);
+
+    // Include/Exclude toggle
+    const modeLabel = document.createElement('span');
+    modeLabel.textContent = 'Mode:';
+    modeLabel.style.cssText = 'font-size:11px;color:#aaa;';
+    bar.appendChild(modeLabel);
+
+    const incBtn = makeBtn('Include', 'Layer renders only inside masked region', layer._maskMode === 'include');
+    incBtn.style.cssText += 'background:' + (layer._maskMode === 'include' ? '#2a6' : 'transparent') + ';';
+    const excBtn = makeBtn('Exclude', 'Layer renders everywhere except masked region', layer._maskMode === 'exclude');
+    excBtn.style.cssText += 'background:' + (layer._maskMode === 'exclude' ? '#a62' : 'transparent') + ';';
+    incBtn.addEventListener('click', () => {
+      layer._maskMode = 'include';
+      incBtn.classList.add('active');
+      excBtn.classList.remove('active');
+      incBtn.style.background = '#2a6';
+      excBtn.style.background = 'transparent';
+    });
+    excBtn.addEventListener('click', () => {
+      layer._maskMode = 'exclude';
+      excBtn.classList.add('active');
+      incBtn.classList.remove('active');
+      excBtn.style.background = '#a62';
+      incBtn.style.background = 'transparent';
+    });
+    bar.appendChild(incBtn);
+    bar.appendChild(excBtn);
+
+    // Separator
+    const sep2 = document.createElement('span');
+    sep2.style.cssText = 'width:1px;height:18px;background:#444;margin:0 2px;';
+    bar.appendChild(sep2);
+
+    // Clear
+    const clearBtn = makeBtn('Clear', 'Remove all mask shapes for this layer', false);
+    clearBtn.addEventListener('click', () => {
+      layer._masks = [];
+    });
+    bar.appendChild(clearBtn);
+
+    // Done
+    const doneBtn = makeBtn('✓ Done', 'Exit mask edit mode', false);
+    doneBtn.style.cssText += 'background:#3478f6;color:#fff;font-weight:bold;';
+    doneBtn.addEventListener('click', () => {
+      this._exitMaskEditMode();
+    });
+    bar.appendChild(doneBtn);
+
+    document.body.appendChild(bar);
+    this._maskToolbarEl = bar;
+  }
+
+  _destroyMaskToolbar() {
+    if (this._maskToolbarEl) {
+      this._maskToolbarEl.remove();
+      this._maskToolbarEl = null;
+    }
+  }
+
+  // --- Mask draw mouse handlers ---
+
+  _attachMaskCanvasHandlers() {
+    this._detachMaskCanvasHandlers();
+    const canvas = this.canvas;
+    if (!canvas) return;
+    // Save the previous cursor so we can restore it
+    this._maskPrevCursor = canvas.style.cursor;
+    canvas.style.cursor = 'crosshair';
+
+    const getNorm = (e) => {
+      const rect = canvas.getBoundingClientRect();
+      const cx = e.clientX ?? (e.touches && e.touches[0]?.clientX) ?? 0;
+      const cy = e.clientY ?? (e.touches && e.touches[0]?.clientY) ?? 0;
+      return {
+        x: Math.max(0, Math.min(1, (cx - rect.left) / rect.width)),
+        y: Math.max(0, Math.min(1, (cy - rect.top)  / rect.height)),
+      };
+    };
+
+    const onDown = (e) => {
+      if (this._maskEditingLayerIndex < 0) return;
+      e.preventDefault();
+      const p = getNorm(e);
+      this._maskDrawStart = p;
+      this._maskDrawing = true;
+      if (this._maskTool === 'freehand') {
+        this._maskCurrentDraw = { type: 'freehand', points: [[p.x, p.y]] };
+      } else {
+        this._maskCurrentDraw = { type: this._maskTool, x: p.x, y: p.y, w: 0, h: 0 };
+      }
+    };
+
+    const onMove = (e) => {
+      if (!this._maskDrawing || !this._maskCurrentDraw) return;
+      e.preventDefault();
+      const p = getNorm(e);
+      const m = this._maskCurrentDraw;
+      if (m.type === 'freehand') {
+        const last = m.points[m.points.length - 1];
+        // Throttle: only push if moved at least 0.003 normalized units
+        if (!last || Math.hypot(p.x - last[0], p.y - last[1]) > 0.003) {
+          m.points.push([p.x, p.y]);
+        }
+      } else {
+        m.w = p.x - this._maskDrawStart.x;
+        m.h = p.y - this._maskDrawStart.y;
+      }
+    };
+
+    const onUp = (e) => {
+      if (!this._maskDrawing) return;
+      e?.preventDefault?.();
+      this._maskDrawing = false;
+      const m = this._maskCurrentDraw;
+      this._maskCurrentDraw = null;
+      const layer = this.layers[this._maskEditingLayerIndex];
+      if (!layer || !m) return;
+      if (m.type === 'rect' || m.type === 'ellipse') {
+        // Normalize negative w/h
+        if (m.w < 0) { m.x += m.w; m.w = -m.w; }
+        if (m.h < 0) { m.y += m.h; m.h = -m.h; }
+        if (m.w < 0.01 || m.h < 0.01) return; // ignore tiny shapes
+      } else if (m.type === 'freehand') {
+        if (!m.points || m.points.length < 3) return; // ignore degenerate
+      }
+      if (!Array.isArray(layer._masks)) layer._masks = [];
+      layer._masks.push(m);
+    };
+
+    canvas.addEventListener('mousedown',  onDown);
+    window.addEventListener('mousemove',  onMove);
+    window.addEventListener('mouseup',    onUp);
+    canvas.addEventListener('touchstart', onDown, { passive: false });
+    window.addEventListener('touchmove',  onMove, { passive: false });
+    window.addEventListener('touchend',   onUp);
+
+    this._maskCanvasHandlers = { onDown, onMove, onUp };
+  }
+
+  _detachMaskCanvasHandlers() {
+    const canvas = this.canvas;
+    const h = this._maskCanvasHandlers;
+    if (canvas && this._maskPrevCursor !== undefined) {
+      canvas.style.cursor = this._maskPrevCursor;
+      this._maskPrevCursor = undefined;
+    }
+    if (!h || !canvas) {
+      this._maskCanvasHandlers = null;
+      return;
+    }
+    canvas.removeEventListener('mousedown',  h.onDown);
+    window.removeEventListener('mousemove',  h.onMove);
+    window.removeEventListener('mouseup',    h.onUp);
+    canvas.removeEventListener('touchstart', h.onDown);
+    window.removeEventListener('touchmove',  h.onMove);
+    window.removeEventListener('touchend',   h.onUp);
+    this._maskCanvasHandlers = null;
+  }
+
+  // --- Mask edit overlay (drawn after post-process) ---
+
+  _drawMaskEditOverlay(w, h) {
+    const layer = this.layers[this._maskEditingLayerIndex];
+    if (!layer) return;
+    const ctx = this.ctx;
+    const mode = layer._maskMode ?? 'include';
+
+    // Build the path of all current masks + current in-progress shape preview
+    const previewMasks = Array.isArray(layer._masks) ? [...layer._masks] : [];
+    if (this._maskDrawing && this._maskCurrentDraw) {
+      const m = this._maskCurrentDraw;
+      if (m.type === 'freehand') {
+        previewMasks.push(m);
+      } else {
+        // Normalize negative w/h for live preview
+        let x = m.x, y = m.y, ww = m.w, hh = m.h;
+        if (ww < 0) { x += ww; ww = -ww; }
+        if (hh < 0) { y += hh; hh = -hh; }
+        previewMasks.push({ type: m.type, x, y, w: ww, h: hh });
+      }
+    }
+
+    ctx.save();
+
+    // Dim the area that WON'T be rendered:
+    // include mode → dim everywhere outside mask
+    // exclude mode → dim inside mask
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.fillStyle = 'rgba(0,0,0,0.45)';
+    if (previewMasks.length === 0) {
+      // No mask yet: dim entire canvas to indicate "nothing will render in include mode"
+      // For exclude mode, with no mask everything renders so don't dim.
+      if (mode === 'include') ctx.fillRect(0, 0, w, h);
+    } else {
+      const dimPath = new Path2D();
+      if (mode === 'include') {
+        // Dim outside: full rect + mask shapes with evenodd
+        dimPath.rect(0, 0, w, h);
+        this._addMaskShapesToPath(dimPath, previewMasks, w, h);
+        ctx.fill(dimPath, 'evenodd');
+      } else {
+        // Dim inside the masks
+        this._addMaskShapesToPath(dimPath, previewMasks, w, h);
+        ctx.fill(dimPath);
+      }
+    }
+
+    // Draw mask outlines
+    if (previewMasks.length > 0) {
+      const outlinePath = new Path2D();
+      this._addMaskShapesToPath(outlinePath, previewMasks, w, h);
+      ctx.lineWidth = 2;
+      ctx.setLineDash([8, 6]);
+      ctx.strokeStyle = mode === 'include' ? 'rgba(120,255,160,0.95)' : 'rgba(255,160,120,0.95)';
+      ctx.stroke(outlinePath);
+      ctx.setLineDash([]);
+    }
+
+    // Top-left badge with mode + tool
+    ctx.font = 'bold 12px monospace';
+    ctx.textBaseline = 'top';
+    const badge = `MASK EDIT — ${mode.toUpperCase()} | tool: ${this._maskTool}`;
+    const tw = ctx.measureText(badge).width;
+    ctx.fillStyle = 'rgba(0,0,0,0.7)';
+    ctx.fillRect(8, 8, tw + 16, 22);
+    ctx.fillStyle = mode === 'include' ? '#7fff9f' : '#ffa07f';
+    ctx.fillText(badge, 16, 13);
+
+    ctx.restore();
+  }
+
   // --- Draw ---
 
   draw(frequencyData, timeDomainData) {
@@ -2114,7 +2507,13 @@ export class LiquidShowVisualizer {
       compCtx.globalCompositeOperation = layer.blendMode;
       compCtx.imageSmoothingEnabled = true;
       compCtx.imageSmoothingQuality = 'high';
+      const hasMask = this._layerHasActiveMask(layer);
+      if (hasMask) {
+        compCtx.save();
+        this._applyMaskClip(compCtx, layer, w, h);
+      }
       compCtx.drawImage(this.layerCanvases[i], 0, 0, w, h);
+      if (hasMask) compCtx.restore();
     }
     compCtx.globalAlpha = 1;
     compCtx.globalCompositeOperation = 'source-over';
@@ -2124,6 +2523,12 @@ export class LiquidShowVisualizer {
 
     // Post-processing (with timing)
     this._postProcess(w, h, audio, timing);
+
+    // Mask edit mode overlay (drawn last, on top of everything)
+    if (this._maskEditingLayerIndex >= 0) {
+      this._drawMaskEditOverlay(w, h);
+    }
+
     timing.total = performance.now() - drawStart;
   }
 
@@ -2342,6 +2747,13 @@ export class LiquidShowVisualizer {
     delBtn.addEventListener('click', () => {
       if (this._globalLock) return;
       if (this.layers.length <= 1) return;
+      // If we're editing the mask of the layer being deleted, exit mask edit mode
+      if (this._maskEditingLayerIndex === this.selectedLayerIndex) {
+        this._exitMaskEditMode();
+      } else if (this._maskEditingLayerIndex > this.selectedLayerIndex) {
+        // Layer indices shift down by 1 after splice
+        this._maskEditingLayerIndex--;
+      }
       this.layers.splice(this.selectedLayerIndex, 1);
       if (this.selectedLayerIndex >= this.layers.length) this.selectedLayerIndex = this.layers.length - 1;
       if (this.soloLayerIndex >= this.layers.length) this.soloLayerIndex = -1;
@@ -2407,6 +2819,12 @@ export class LiquidShowVisualizer {
   }
 
   destroyPanel() {
+    // Clean up mask editor if active
+    if (this._maskEditingLayerIndex >= 0) {
+      this._exitMaskEditMode();
+    }
+    this._destroyMaskToolbar();
+    this._detachMaskCanvasHandlers();
     if (this._controlPanelEl) {
       this._controlPanelEl.classList.remove('ll-active');
       this._controlPanelEl = null;
@@ -2468,6 +2886,8 @@ export class LiquidShowVisualizer {
         lightDuration:  l.type === 'lightning' ? (l._lightDuration  ?? 0.4) : undefined,
         spinSpeed: SPIN_LAYER_TYPES.has(l.type) ? (l._spinSpeed ?? 0) : undefined,
         spinDir:   SPIN_LAYER_TYPES.has(l.type) ? (l._spinDir   ?? 'cw') : undefined,
+        masks: Array.isArray(l._masks) && l._masks.length > 0 ? this._cloneMasks(l._masks) : undefined,
+        maskMode: Array.isArray(l._masks) && l._masks.length > 0 ? (l._maskMode ?? 'include') : undefined,
       })),
       selectedLayerIndex: this.selectedLayerIndex,
       selectedLayerIndices: [...this.selectedLayerIndices],
@@ -2508,6 +2928,11 @@ export class LiquidShowVisualizer {
   _restoreSnapshot(json) {
     this._historyPaused = true;
     const state = JSON.parse(json);
+
+    // Mask edit mode references this.layers[idx]; bail before we swap them out
+    if (this._maskEditingLayerIndex >= 0) {
+      this._exitMaskEditMode();
+    }
 
     this.layers = state.layers.map(saved => {
       const layer = this._createLayer(saved.type, {
@@ -2556,6 +2981,9 @@ export class LiquidShowVisualizer {
         if (saved.spinSpeed !== undefined) layer._spinSpeed = saved.spinSpeed;
         if (saved.spinDir   !== undefined) layer._spinDir   = saved.spinDir;
       }
+      // Restore mask params (always set, default to empty)
+      layer._masks    = Array.isArray(saved.masks) ? this._cloneMasks(saved.masks) : [];
+      layer._maskMode = saved.maskMode ?? 'include';
       return layer;
     });
 
@@ -2696,6 +3124,15 @@ export class LiquidShowVisualizer {
       row.appendChild(audioSync);
       row.appendChild(name);
       row.appendChild(typeSelect);
+
+      // Mask indicator: small icon shown when layer has an active mask
+      if (this._layerHasActiveMask(layer)) {
+        const maskIcon = document.createElement('span');
+        maskIcon.textContent = '🎭';
+        maskIcon.title = `Mask active (${layer._maskMode ?? 'include'}, ${layer._masks.length} shape${layer._masks.length === 1 ? '' : 's'})`;
+        maskIcon.style.cssText = 'font-size:11px;margin-left:4px;opacity:0.85;';
+        row.appendChild(maskIcon);
+      }
 
       row.addEventListener('click', (e) => {
         if (e.ctrlKey || e.metaKey) {
@@ -3624,6 +4061,71 @@ export class LiquidShowVisualizer {
         spinDirRow.appendChild(btn);
       });
       container.appendChild(spinDirRow);
+    }
+
+    // --- Mask controls (all layer types) ---
+    if (!isMulti) {
+      const hasMask = this._layerHasActiveMask(layer);
+      const isEditingThis = this._maskEditingLayerIndex === this.selectedLayerIndex;
+      const maskRow = document.createElement('div');
+      maskRow.className = 'll-image-row';
+      maskRow.style.cssText = 'gap:6px;margin-top:4px;';
+
+      const maskBtn = document.createElement('button');
+      maskBtn.className = 'll-toggle' + (isEditingThis ? ' active' : '');
+      const shapeCount = hasMask ? layer._masks.length : 0;
+      maskBtn.textContent = isEditingThis
+        ? '🎭 Editing…'
+        : (hasMask ? `🎭 Edit Mask (${shapeCount})` : '🎭 Add Mask');
+      maskBtn.title = hasMask
+        ? `Edit mask shapes — currently ${layer._maskMode ?? 'include'} mode, ${shapeCount} shape${shapeCount === 1 ? '' : 's'}`
+        : 'Add a mask to restrict where this layer renders';
+      maskBtn.style.cssText = 'flex:1;padding:4px 8px;font-size:10px;';
+      maskBtn.addEventListener('click', () => {
+        if (this._isLayerLocked(this.selectedLayerIndex)) return;
+        if (this._maskEditingLayerIndex === this.selectedLayerIndex) {
+          this._exitMaskEditMode();
+        } else {
+          // If editing a different layer, swap
+          if (this._maskEditingLayerIndex >= 0) this._exitMaskEditMode();
+          this._enterMaskEditMode(this.selectedLayerIndex);
+        }
+      });
+      maskRow.appendChild(maskBtn);
+
+      // Mode quick-switch shown when mask exists (matches toolbar Include/Exclude)
+      if (hasMask) {
+        const modeBtn = document.createElement('button');
+        const curMode = layer._maskMode ?? 'include';
+        modeBtn.className = 'll-toggle';
+        modeBtn.textContent = curMode === 'include' ? 'Inc' : 'Exc';
+        modeBtn.title = `Mask mode: ${curMode}. Click to flip.`;
+        modeBtn.style.cssText = 'padding:4px 8px;font-size:10px;min-width:36px;'
+          + (curMode === 'include' ? 'background:#2a6;color:#fff;' : 'background:#a62;color:#fff;');
+        modeBtn.addEventListener('click', () => {
+          if (this._isLayerLocked(this.selectedLayerIndex)) return;
+          layer._maskMode = curMode === 'include' ? 'exclude' : 'include';
+          this._rebuildLayerKnobs();
+          this._pushHistory();
+        });
+        maskRow.appendChild(modeBtn);
+
+        const clearBtn = document.createElement('button');
+        clearBtn.className = 'll-toggle';
+        clearBtn.textContent = '✕';
+        clearBtn.title = 'Clear mask';
+        clearBtn.style.cssText = 'padding:4px 8px;font-size:10px;';
+        clearBtn.addEventListener('click', () => {
+          if (this._isLayerLocked(this.selectedLayerIndex)) return;
+          layer._masks = [];
+          this._rebuildLayerList();
+          this._rebuildLayerKnobs();
+          this._pushHistory();
+        });
+        maskRow.appendChild(clearBtn);
+      }
+
+      container.appendChild(maskRow);
     }
 
     // Toolbar: Randomize + Randomize All + Dynamic
