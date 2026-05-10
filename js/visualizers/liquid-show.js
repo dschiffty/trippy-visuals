@@ -497,6 +497,36 @@ export class LiquidShowVisualizer {
     }
   }
 
+  // Clear all layers and reset globals to defaults — used by "New Canvas" action.
+  _resetToBlank() {
+    if (this._maskEditingLayerIndex >= 0) this._exitMaskEditMode();
+    this.layers = [];
+    this.selectedLayerIndex = 0;
+    this.selectedLayerIndices = new Set();
+    this.soloLayerIndex = -1;
+    GLOBAL_PARAMS.forEach(p => this.globals[p.key] = p.default);
+    this.globals.bw = false;
+    BW_PARAMS.forEach(p => this.globals[p.key] = p.default);
+    this._currentPresetId = null;
+    this._dynamicEnabled = false;
+    this._globalLock = false;
+    this.journeyBases = null;
+    if (this._presetSelect) this._presetSelect.value = '';
+    if (this.panelEl) {
+      this._rebuildLayerList();
+      this._rebuildLayerKnobs();
+      this._globalKnobs.forEach(k => {
+        const val = this.globals[k.param.key];
+        if (val !== undefined) { k.value = val; k.baseValue = val; k.updateVisual(); }
+      });
+      this._bwKnobs.forEach(k => {
+        const val = this.globals[k.param.key];
+        if (val !== undefined) { k.value = val; k.baseValue = val; k.updateVisual(); }
+      });
+    }
+    this._pushHistory?.();
+  }
+
   // --- Audio ---
 
   _computeAudio(frequencyData) {
@@ -3399,10 +3429,16 @@ export class LiquidShowVisualizer {
     this.destroyPanel();
     this._app = app || null;
 
-    // Randomize everything on first visit this session
+    // Load London Tube as the default state on first visit this session
     if (!this._hasInitialized) {
       this._hasInitialized = true;
-      this._randomizeAllLayersInternal();
+      const londonTube = LL_PRESETS.find(p => p.id === 'london-tube');
+      if (londonTube) {
+        this.setState(JSON.parse(JSON.stringify(londonTube.vizState)));
+        this._currentPresetId = 'london-tube';
+      } else {
+        this._randomizeAllLayersInternal();
+      }
     }
 
     // Add class to control panel for vertical stacking layout
@@ -3434,6 +3470,8 @@ export class LiquidShowVisualizer {
       opt.textContent = p.name;
       this._presetSelect.appendChild(opt);
     });
+    // Sync dropdown to whatever preset is currently active (e.g. loaded on first visit)
+    if (this._currentPresetId) this._presetSelect.value = this._currentPresetId;
     this._presetSelect.addEventListener('change', () => {
       const id = this._presetSelect.value;
       if (!id) return;
@@ -3446,6 +3484,18 @@ export class LiquidShowVisualizer {
     });
     presetRow.appendChild(presetLabel);
     presetRow.appendChild(this._presetSelect);
+
+    const blankBtn = document.createElement('button');
+    blankBtn.className = 'll-blank-canvas-btn';
+    blankBtn.textContent = 'New Canvas';
+    blankBtn.title = 'Clear all layers and reset to a blank canvas';
+    blankBtn.addEventListener('click', () => {
+      if (confirm('Clear everything and start fresh?')) {
+        this._resetToBlank();
+      }
+    });
+    presetRow.appendChild(blankBtn);
+
     panel.appendChild(presetRow);
 
     const layout = document.createElement('div');

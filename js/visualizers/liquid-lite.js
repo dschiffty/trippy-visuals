@@ -16,11 +16,12 @@ export class LiquidLiteVisualizer {
   constructor(canvas) {
     this.canvas = canvas;
     this.engine = new LiquidShowVisualizer(canvas);
-    // Load a random preset on start
-    const preset = LL_PRESETS[Math.floor(Math.random() * LL_PRESETS.length)];
-    if (preset) {
-      this._currentPresetId = preset.id;
-      this.engine.setState(JSON.parse(JSON.stringify(preset.vizState)));
+    // Load London Tube as the default preset on start
+    const londonTube = LL_PRESETS.find(p => p.id === 'london-tube');
+    const defaultPreset = londonTube || LL_PRESETS[0];
+    if (defaultPreset) {
+      this._currentPresetId = defaultPreset.id;
+      this.engine.setState(JSON.parse(JSON.stringify(defaultPreset.vizState)));
     }
     this._app = null;
     this._micBtn = null;
@@ -142,6 +143,17 @@ export class LiquidLiteVisualizer {
       if (this._presetSelect) this._presetSelect.value = '';
     });
     bottomBar.appendChild(randomBtn);
+
+    // New blank canvas button
+    const blankBtn = this._makeFloatBtn('⊘', 'New Canvas');
+    blankBtn.addEventListener('click', () => {
+      if (confirm('Clear everything and start fresh?')) {
+        this.engine._resetToBlank();
+        this._currentPresetId = null;
+        if (this._presetSelect) this._presetSelect.value = '';
+      }
+    });
+    bottomBar.appendChild(blankBtn);
 
     this._bottomBar = bottomBar;
     panel.appendChild(bottomBar);

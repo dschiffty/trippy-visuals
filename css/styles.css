@@ -2238,6 +2238,24 @@ html, body {
   cursor: pointer;
 }
 
+.ll-blank-canvas-btn {
+  flex-shrink: 0;
+  padding: 2px 7px;
+  font-size: 10px;
+  font-family: monospace;
+  cursor: pointer;
+  background: #dcdcdc;
+  border: 1px solid #999;
+  border-radius: 3px;
+  color: #222;
+  white-space: nowrap;
+  margin-left: auto;
+}
+.ll-blank-canvas-btn:hover {
+  background: #efefef;
+  border-color: #666;
+}
+
 /* --- Layer Controls (center) --- */
 .ll-layer-controls {
   flex: 1;
