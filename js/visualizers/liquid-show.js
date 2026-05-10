@@ -3432,7 +3432,7 @@ export class LiquidShowVisualizer {
     // Load London Tube as the default state on first visit this session
     if (!this._hasInitialized) {
       this._hasInitialized = true;
-      const londonTube = LL_PRESETS.find(p => p.id === 'london-tube');
+      const londonTube = LL_PRESETS.find(p => p.id === 'rainbow-rpm');
       if (londonTube) {
         this.setState(JSON.parse(JSON.stringify(londonTube.vizState)));
         this._currentPresetId = 'london-tube';

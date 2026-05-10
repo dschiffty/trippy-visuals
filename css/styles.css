@@ -2249,7 +2249,6 @@ html, body {
   border-radius: 3px;
   color: #222;
   white-space: nowrap;
-  margin-left: auto;
 }
 .ll-blank-canvas-btn:hover {
   background: #efefef;

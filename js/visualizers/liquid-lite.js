@@ -17,7 +17,7 @@ export class LiquidLiteVisualizer {
     this.canvas = canvas;
     this.engine = new LiquidShowVisualizer(canvas);
     // Load London Tube as the default preset on start
-    const londonTube = LL_PRESETS.find(p => p.id === 'london-tube');
+    const londonTube = LL_PRESETS.find(p => p.id === 'rainbow-rpm');
     const defaultPreset = londonTube || LL_PRESETS[0];
     if (defaultPreset) {
       this._currentPresetId = defaultPreset.id;
