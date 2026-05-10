@@ -1679,11 +1679,22 @@ html, body {
   border-radius: 4px;
   color: #bbb;
   cursor: pointer;
-  transition: background 0.12s, color 0.12s;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
 }
 .ll-audio-action-btn:hover {
   background: rgba(255,255,255,0.14);
   color: #fff;
+}
+/* Switch button: solid/legible so it reads as a standard button */
+.ll-audio-switch-btn {
+  background: rgba(225,225,225,0.92);
+  color: #111;
+  border-color: #888;
+}
+.ll-audio-switch-btn:hover {
+  background: #fff;
+  color: #000;
+  border-color: #555;
 }
 .ll-audio-disconnect-btn {
   color: #e08080;
@@ -1693,6 +1704,48 @@ html, body {
   background: rgba(200,80,80,0.18);
   color: #ffaaaa;
   border-color: rgba(200,80,80,0.55);
+}
+
+/* Mic gain inline expander */
+.ll-audio-gain-toggle {
+  display: block;
+  width: 100%;
+  margin-top: 5px;
+  padding: 3px 7px;
+  font-size: 10px;
+  font-family: monospace;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.15);
+  border-radius: 4px;
+  color: #999;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.12s, color 0.12s;
+}
+.ll-audio-gain-toggle:hover,
+.ll-audio-gain-toggle-open {
+  background: rgba(255,255,255,0.1);
+  color: #ddd;
+  border-color: rgba(255,255,255,0.28);
+}
+.ll-audio-gain-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 2px 2px;
+}
+.ll-audio-gain-label {
+  font-size: 10px;
+  font-family: monospace;
+  color: #888;
+  min-width: 28px;
+  flex-shrink: 0;
+}
+.ll-audio-gain-slider {
+  flex: 1;
+  height: 3px;
+  accent-color: #4cdc90;
+  cursor: pointer;
 }
 
 /* ---- Connect Audio picker (popover) ---- */

@@ -5083,6 +5083,7 @@ export class LiquidShowVisualizer {
       const section = document.createElement('div');
       section.className = 'll-audio-source-section';
 
+      const self = this;
       const render = () => {
         section.innerHTML = '';
         const micActive = app.mic?.active;
@@ -5109,7 +5110,7 @@ export class LiquidShowVisualizer {
           btnRow.className = 'll-audio-action-row';
 
           const switchBtn = document.createElement('button');
-          switchBtn.className = 'll-audio-action-btn';
+          switchBtn.className = 'll-audio-action-btn ll-audio-switch-btn';
           switchBtn.textContent = '⇄ Switch';
           switchBtn.title = 'Switch to a different audio source';
           switchBtn.addEventListener('click', () => app.switchAudio(switchBtn));
@@ -5126,6 +5127,42 @@ export class LiquidShowVisualizer {
           btnRow.appendChild(switchBtn);
           btnRow.appendChild(disconnectBtn);
           section.appendChild(btnRow);
+
+          // Mic gain toggle + inline slider (mic only)
+          if (micActive) {
+            const gainToggle = document.createElement('button');
+            gainToggle.className = 'll-audio-gain-toggle' + (self._gainExpanded ? ' ll-audio-gain-toggle-open' : '');
+            gainToggle.textContent = (self._gainExpanded ? '▲' : '▼') + ' Mic Gain';
+            gainToggle.addEventListener('click', () => {
+              self._gainExpanded = !self._gainExpanded;
+              render();
+            });
+            section.appendChild(gainToggle);
+
+            if (self._gainExpanded) {
+              const gainRow = document.createElement('div');
+              gainRow.className = 'll-audio-gain-row';
+
+              const gainLabel = document.createElement('label');
+              gainLabel.className = 'll-audio-gain-label';
+              gainLabel.textContent = 'Gain';
+
+              const gainSlider = document.createElement('input');
+              gainSlider.type = 'range';
+              gainSlider.className = 'll-audio-gain-slider';
+              gainSlider.min = '0';
+              gainSlider.max = '6';
+              gainSlider.step = '0.1';
+              gainSlider.value = app.mic.gainValue;
+              gainSlider.addEventListener('input', () => {
+                app.setMicGain(parseFloat(gainSlider.value));
+              });
+
+              gainRow.appendChild(gainLabel);
+              gainRow.appendChild(gainSlider);
+              section.appendChild(gainRow);
+            }
+          }
         } else {
           // Idle state: single prominent CTA button
           const connectBtn = document.createElement('button');
