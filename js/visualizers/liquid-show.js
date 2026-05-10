@@ -260,13 +260,15 @@ export class LiquidShowVisualizer {
 
     // --- Mask editor state ---
     this._maskEditingLayerIndex = -1;
-    this._maskTool = 'rect';        // 'rect' | 'ellipse' | 'freehand'
+    this._maskTool = 'rect';        // 'rect' | 'ellipse' | 'freehand' | 'polygon'
     this._maskDrawing = false;
     this._maskDrawStart = null;     // { x, y } in normalized 0-1 coords
     this._maskCurrentDraw = null;   // in-progress shape preview
     this._maskToolbarEl = null;
     this._maskCanvasHandlers = null;
     this._maskPanelPrevDisplay = undefined; // saved panel.style.display while editing
+    this._maskPolygonPoints = [];   // in-progress polygon vertices [[x,y], ...]
+    this._maskPolygonCursor = null; // current cursor pos for preview line
   }
 
   // --- Layer Creation ---
@@ -2112,6 +2114,8 @@ export class LiquidShowVisualizer {
     this._maskEditingLayerIndex = layerIndex;
     this._maskDrawing = false;
     this._maskCurrentDraw = null;
+    this._maskPolygonPoints = [];
+    this._maskPolygonCursor = null;
     // Hide the settings panel so the canvas is fully visible while drawing.
     // The mask toolbar is `position:fixed` and stays on top.
     if (this.panelEl && this._maskPanelPrevDisplay === undefined) {
@@ -2128,6 +2132,8 @@ export class LiquidShowVisualizer {
     this._maskEditingLayerIndex = -1;
     this._maskDrawing = false;
     this._maskCurrentDraw = null;
+    this._maskPolygonPoints = [];
+    this._maskPolygonCursor = null;
     this._destroyMaskToolbar();
     this._detachMaskCanvasHandlers();
     // Restore the settings panel to whatever display state it had before
@@ -2138,6 +2144,17 @@ export class LiquidShowVisualizer {
     this._rebuildLayerList();
     this._rebuildLayerKnobs();
     this._pushHistory();
+  }
+
+  // Close and commit the in-progress polygon.
+  _closePolygon() {
+    const layer = this.layers[this._maskEditingLayerIndex];
+    const pts = this._maskPolygonPoints;
+    this._maskPolygonPoints = [];
+    this._maskPolygonCursor = null;
+    if (!layer || pts.length < 3) return;
+    if (!Array.isArray(layer._masks)) layer._masks = [];
+    layer._masks.push({ type: 'freehand', points: pts });
   }
 
   _buildMaskToolbar() {
@@ -2175,11 +2192,15 @@ export class LiquidShowVisualizer {
       ['rect',     '▭ Rect',     'Drag to draw a rectangle mask'],
       ['ellipse',  '◯ Ellipse',  'Drag to draw an ellipse mask'],
       ['freehand', '✏ Freehand', 'Drag to draw a freehand region'],
+      ['polygon',  '⬡ Polygon',  'Click to place vertices; double-click or click first point to close'],
     ];
     const toolBtns = {};
     tools.forEach(([key, label, tip]) => {
       const b = makeBtn(label, tip, this._maskTool === key);
       b.addEventListener('click', () => {
+        // Cancel any in-progress polygon when switching tools
+        this._maskPolygonPoints = [];
+        this._maskPolygonCursor = null;
         this._maskTool = key;
         Object.values(toolBtns).forEach(bb => bb.classList.remove('active'));
         b.classList.add('active');
@@ -2229,6 +2250,8 @@ export class LiquidShowVisualizer {
     const clearBtn = makeBtn('Clear', 'Remove all mask shapes for this layer', false);
     clearBtn.addEventListener('click', () => {
       layer._masks = [];
+      this._maskPolygonPoints = [];
+      this._maskPolygonCursor = null;
     });
     bar.appendChild(clearBtn);
 
@@ -2273,6 +2296,8 @@ export class LiquidShowVisualizer {
 
     const onDown = (e) => {
       if (this._maskEditingLayerIndex < 0) return;
+      // Polygon uses click events, not mousedown/up drag flow
+      if (this._maskTool === 'polygon') return;
       e.preventDefault();
       const p = getNorm(e);
       this._maskDrawStart = p;
@@ -2285,6 +2310,10 @@ export class LiquidShowVisualizer {
     };
 
     const onMove = (e) => {
+      // Always update polygon cursor for live preview line
+      if (this._maskTool === 'polygon' && this._maskEditingLayerIndex >= 0) {
+        this._maskPolygonCursor = getNorm(e);
+      }
       if (!this._maskDrawing || !this._maskCurrentDraw) return;
       e.preventDefault();
       const p = getNorm(e);
@@ -2321,14 +2350,52 @@ export class LiquidShowVisualizer {
       layer._masks.push(m);
     };
 
+    // Polygon: click to place vertices, double-click or first-vertex click to close
+    const onPolyClick = (e) => {
+      if (this._maskTool !== 'polygon' || this._maskEditingLayerIndex < 0) return;
+      e.preventDefault();
+      const p = getNorm(e);
+
+      // Double-click (e.detail >= 2) closes the polygon
+      if (e.detail >= 2) {
+        this._closePolygon();
+        return;
+      }
+
+      // Click near the first vertex also closes (when we have ≥ 3 points)
+      if (this._maskPolygonPoints.length >= 3) {
+        const first = this._maskPolygonPoints[0];
+        const rect = canvas.getBoundingClientRect();
+        // ~16px proximity threshold in normalized units
+        const thresh = 16 / Math.min(rect.width, rect.height);
+        if (Math.hypot(p.x - first[0], p.y - first[1]) < thresh) {
+          this._closePolygon();
+          return;
+        }
+      }
+
+      // Place a new vertex
+      this._maskPolygonPoints.push([p.x, p.y]);
+    };
+
+    // Escape key cancels an in-progress polygon
+    const onKeyDown = (e) => {
+      if (e.key === 'Escape' && this._maskTool === 'polygon') {
+        this._maskPolygonPoints = [];
+        this._maskPolygonCursor = null;
+      }
+    };
+
     canvas.addEventListener('mousedown',  onDown);
     window.addEventListener('mousemove',  onMove);
     window.addEventListener('mouseup',    onUp);
+    canvas.addEventListener('click',      onPolyClick);
+    window.addEventListener('keydown',    onKeyDown);
     canvas.addEventListener('touchstart', onDown, { passive: false });
     window.addEventListener('touchmove',  onMove, { passive: false });
     window.addEventListener('touchend',   onUp);
 
-    this._maskCanvasHandlers = { onDown, onMove, onUp };
+    this._maskCanvasHandlers = { onDown, onMove, onUp, onPolyClick, onKeyDown };
   }
 
   _detachMaskCanvasHandlers() {
@@ -2345,6 +2412,8 @@ export class LiquidShowVisualizer {
     canvas.removeEventListener('mousedown',  h.onDown);
     window.removeEventListener('mousemove',  h.onMove);
     window.removeEventListener('mouseup',    h.onUp);
+    canvas.removeEventListener('click',      h.onPolyClick);
+    window.removeEventListener('keydown',    h.onKeyDown);
     canvas.removeEventListener('touchstart', h.onDown);
     window.removeEventListener('touchmove',  h.onMove);
     window.removeEventListener('touchend',   h.onUp);
@@ -2408,6 +2477,46 @@ export class LiquidShowVisualizer {
       ctx.strokeStyle = mode === 'include' ? 'rgba(120,255,160,0.95)' : 'rgba(255,160,120,0.95)';
       ctx.stroke(outlinePath);
       ctx.setLineDash([]);
+    }
+
+    // Draw in-progress polygon construction preview
+    if (this._maskTool === 'polygon' && this._maskPolygonPoints.length > 0) {
+      const pts = this._maskPolygonPoints;
+      const polyColor = mode === 'include' ? 'rgba(120,255,160,0.95)' : 'rgba(255,160,120,0.95)';
+
+      // Dashed edges + preview line to cursor
+      ctx.lineWidth = 2;
+      ctx.setLineDash([8, 6]);
+      ctx.strokeStyle = polyColor;
+      ctx.beginPath();
+      ctx.moveTo(pts[0][0] * w, pts[0][1] * h);
+      for (let i = 1; i < pts.length; i++) {
+        ctx.lineTo(pts[i][0] * w, pts[i][1] * h);
+      }
+      if (this._maskPolygonCursor) {
+        ctx.lineTo(this._maskPolygonCursor.x * w, this._maskPolygonCursor.y * h);
+      }
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      // Vertex dot handles
+      for (let i = 0; i < pts.length; i++) {
+        const px = pts[i][0] * w, py = pts[i][1] * h;
+        const isFirst = i === 0;
+        // Filled dot
+        ctx.fillStyle = polyColor;
+        ctx.beginPath();
+        ctx.arc(px, py, isFirst ? 6 : 4, 0, Math.PI * 2);
+        ctx.fill();
+        // White ring around first vertex when polygon can be closed (≥ 3 points)
+        if (isFirst && pts.length >= 3) {
+          ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+          ctx.lineWidth = 1.5;
+          ctx.beginPath();
+          ctx.arc(px, py, 9, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+      }
     }
 
     // Top-left badge with mode + tool
