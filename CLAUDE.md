@@ -14,6 +14,13 @@
 - Ask the user to screenshot the debug overlay after 30+ seconds and confirm no visual regression before pushing
 - Do not push rendering changes based solely on preview tool results
 
+## Button Legibility Standard
+
+- Every button in the UI must have clearly legible text
+- Default to black or dark text on a light/white background with a visible border, OR white text on a clearly colored background
+- Never use low-contrast combinations like light text on light background or faded/ghost buttons unless explicitly requested
+- When adding any new button, verify it passes a basic legibility check before committing
+
 ## General
 
 - Commit frequently with descriptive messages
