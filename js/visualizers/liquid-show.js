@@ -2764,10 +2764,14 @@ export class LiquidShowVisualizer {
           let dw = p.x - this._maskDrawStart.x;
           let dh = p.y - this._maskDrawStart.y;
           if (e.shiftKey) {
-            // Constrain to square/circle: use the larger absolute delta, preserving sign
-            const dim = Math.max(Math.abs(dw), Math.abs(dh));
-            dw = Math.sign(dw) * dim;
-            dh = Math.sign(dh) * dim;
+            // Constrain to square/circle in pixel space so aspect ratio doesn't distort.
+            // Convert normalized deltas → pixels, pick the larger absolute pixel dimension,
+            // then convert back to normalized before storing.
+            const pw = dw * rect.width;
+            const ph = dh * rect.height;
+            const dim = Math.max(Math.abs(pw), Math.abs(ph));
+            dw = Math.sign(dw) * dim / rect.width;
+            dh = Math.sign(dh) * dim / rect.height;
           }
           m.w = dw;
           m.h = dh;
@@ -3096,16 +3100,17 @@ export class LiquidShowVisualizer {
       }
     }
 
-    // Top-left badge with mode + tool
-    ctx.font = 'bold 12px monospace';
-    ctx.textBaseline = 'top';
-    const selHint = this._maskSelectedShapeIdx >= 0 ? ' | ⌫ delete · drag to move' : '';
-    const badge = `MASK EDIT — ${mode.toUpperCase()} | tool: ${this._maskTool}${selHint}`;
-    const tw = ctx.measureText(badge).width;
-    ctx.fillStyle = 'rgba(0,0,0,0.7)';
-    ctx.fillRect(8, 8, tw + 16, 22);
-    ctx.fillStyle = mode === 'include' ? '#7fff9f' : '#ffa07f';
-    ctx.fillText(badge, 16, 13);
+    // Bottom-left hint (only shown when a shape is selected)
+    if (this._maskSelectedShapeIdx >= 0) {
+      ctx.font = 'bold 12px monospace';
+      ctx.textBaseline = 'bottom';
+      const hint = '⌫ delete  ·  drag to move  ·  drag handle to resize';
+      const tw = ctx.measureText(hint).width;
+      ctx.fillStyle = 'rgba(0,0,0,0.7)';
+      ctx.fillRect(8, h - 30, tw + 16, 22);
+      ctx.fillStyle = 'rgba(255,220,50,0.95)';
+      ctx.fillText(hint, 16, h - 8);
+    }
 
     ctx.restore();
   }
