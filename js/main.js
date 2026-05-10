@@ -1256,6 +1256,14 @@ class App {
       }, 2000);
     });
 
+    // Canvas click in fullscreen fires this event to hide immediately
+    // rather than waiting for the 2s inactivity timer.
+    window.addEventListener('ll-hide-now', () => {
+      if (!document.fullscreenElement) return;
+      clearTimeout(this.fsHideTimer);
+      this.windowEl.classList.remove('show-ui');
+    });
+
     // Toggle class on fullscreen change
     document.addEventListener('fullscreenchange', () => {
       if (document.fullscreenElement) {

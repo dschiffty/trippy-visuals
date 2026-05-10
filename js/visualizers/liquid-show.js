@@ -266,7 +266,6 @@ export class LiquidShowVisualizer {
     this._maskCurrentDraw = null;   // in-progress shape preview
     this._maskToolbarEl = null;
     this._maskCanvasHandlers = null;
-    this._maskPanelPrevDisplay = undefined; // saved panel.style.display while editing
     this._maskPolygonPoints = [];   // in-progress polygon vertices [[x,y], ...]
     this._maskPolygonCursor = null; // current cursor pos for preview line
     this._maskPolyDragging = false;    // true while dragging an existing vertex
@@ -2279,19 +2278,11 @@ export class LiquidShowVisualizer {
     this._maskLocalHistoryIdx = -1;
     // Seed the local history with the current mask state
     this._maskHistoryPush();
-    // Hide the settings panel so the canvas is fully visible while drawing.
-    // The mask toolbar is `position:fixed` and stays on top.
-    if (this.panelEl && this._maskPanelPrevDisplay === undefined) {
-      this._maskPanelPrevDisplay = this.panelEl.style.display || '';
-      this.panelEl.style.display = 'none';
-    }
-    // Also force-hide the title bar, menu bar, and status bar so only the
-    // mask toolbar floats over the canvas. On exit we restore to _llUiHidden
-    // so the user's chosen global hide state is honoured.
-    for (const cls of ['.title-bar', '.menu-bar', '.status-bar']) {
-      const el = document.querySelector(cls);
-      if (el) el.style.display = 'none';
-    }
+    // Hide all chrome so the canvas is fully visible while drawing.
+    // _applyLLUIHidden(true) is the same hide used by canvas-click-to-hide,
+    // so the hidden state is always consistent.  On exit we call
+    // _applyLLUIHidden(_llUiHidden) to restore to whatever the user had chosen.
+    this._applyLLUIHidden(true);
     this._buildMaskToolbar();
     this._attachMaskCanvasHandlers();
     // Note: _rebuildLayerKnobs not needed here — panel is hidden.
@@ -2317,18 +2308,8 @@ export class LiquidShowVisualizer {
     this._maskRedoBtn = null;
     this._destroyMaskToolbar();
     this._detachMaskCanvasHandlers();
-    // Restore the settings panel to whatever display state it had before
-    if (this.panelEl && this._maskPanelPrevDisplay !== undefined) {
-      this.panelEl.style.display = this._maskPanelPrevDisplay;
-      this._maskPanelPrevDisplay = undefined;
-    }
-    // Restore title / menu bars to the user's chosen global UI state.
-    // If _llUiHidden is true the user had hidden everything; keep it hidden.
-    // If false, show the bars again.
-    for (const cls of ['.title-bar', '.menu-bar', '.status-bar']) {
-      const el = document.querySelector(cls);
-      if (el) el.style.display = this._llUiHidden ? 'none' : '';
-    }
+    // Restore chrome to the user's chosen state (hidden or visible).
+    this._applyLLUIHidden(this._llUiHidden);
     this._rebuildLayerList();
     this._rebuildLayerKnobs();
     this._pushHistory();
@@ -2341,8 +2322,13 @@ export class LiquidShowVisualizer {
     this._applyLLUIHidden(this._llUiHidden);
   }
 
+  // Single source of truth for what "UI hidden" means in windowed mode.
+  // Hides/shows the entire control panel (Modes section + LL panel) and
+  // the chrome bars.  Mobile tap-to-hide takes a separate CSS-class path
+  // via main.js; this method is for the desktop canvas-click path.
   _applyLLUIHidden(hidden) {
-    if (this.panelEl) this.panelEl.style.display = hidden ? 'none' : '';
+    const controlPanel = document.querySelector('.control-panel');
+    if (controlPanel) controlPanel.style.display = hidden ? 'none' : '';
     for (const cls of ['.title-bar', '.menu-bar', '.status-bar']) {
       const el = document.querySelector(cls);
       if (el) el.style.display = hidden ? 'none' : '';
@@ -3586,6 +3572,13 @@ export class LiquidShowVisualizer {
       if (e.target !== this.canvas) return;
       // Mask edit mode owns canvas clicks; leave them alone
       if (this._maskEditingLayerIndex >= 0) return;
+      if (document.fullscreenElement) {
+        // In fullscreen the CSS show/hide is driven by the 'show-ui' class managed
+        // by main.js.  Dispatch a custom event so main.js can clear its timer and
+        // immediately remove show-ui without waiting for the 2 s inactivity timeout.
+        window.dispatchEvent(new CustomEvent('ll-hide-now'));
+        return;
+      }
       this._toggleLLFullUI();
     };
     this.canvas.addEventListener('click', this._canvasUIClickHandler);
