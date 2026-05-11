@@ -348,7 +348,13 @@ export class LiquidShowVisualizer {
         imgPanMode:    l.type === 'image' ? (l._imgPanMode    ?? 'off') : undefined,
         imgPanSpeed:   l.type === 'image' ? (l._imgPanSpeed   ?? 0.3)   : undefined,
         imgMotionBlur: l.type === 'image' ? (l._imgMotionBlur ?? 0)     : undefined,
-        webcamDeviceId: l.type === 'webcam' ? (l._webcamDeviceId ?? null) : undefined,
+        webcamDeviceId:    l.type === 'webcam' ? (l._webcamDeviceId  ?? null) : undefined,
+        webcamFlip:        l.type === 'webcam' ? (l._wcamFlip        ?? true) : undefined,
+        webcamExposure:    l.type === 'webcam' ? (l._wcamExposure    ?? 0)    : undefined,
+        webcamContrast:    l.type === 'webcam' ? (l._wcamContrast    ?? 1)    : undefined,
+        webcamSaturation:  l.type === 'webcam' ? (l._wcamSaturation  ?? 1)    : undefined,
+        webcamFrameRate:   l.type === 'webcam' ? (l._wcamFrameRate   ?? null) : undefined,
+        webcamZoom:        l.type === 'webcam' ? (l._wcamZoom        ?? 1)    : undefined,
         lissajousShape: l.type === 'lissajous' ? (l._lissajousShape || 2) : undefined,
         pulseMode: l.type === 'pulse' ? (l._pulseMode || 'constant') : undefined,
         starsRotSpeed: l.type === 'stars' ? (l._starsRotSpeed ?? 0) : undefined,
@@ -413,9 +419,15 @@ export class LiquidShowVisualizer {
           if (saved.imgPanSpeed   !== undefined) layer._imgPanSpeed   = saved.imgPanSpeed;
           if (saved.imgMotionBlur !== undefined) layer._imgMotionBlur = saved.imgMotionBlur;
         }
-        // Restore webcam device preference (stream will be started by buildPanel auto-reconnect)
+        // Restore webcam settings (stream re-started by buildPanel auto-reconnect)
         if (saved.type === 'webcam') {
-          layer._webcamDeviceId = saved.webcamDeviceId ?? null;
+          layer._webcamDeviceId  = saved.webcamDeviceId  ?? null;
+          layer._wcamFlip        = saved.webcamFlip       ?? true;
+          layer._wcamExposure    = saved.webcamExposure   ?? 0;
+          layer._wcamContrast    = saved.webcamContrast   ?? 1;
+          layer._wcamSaturation  = saved.webcamSaturation ?? 1;
+          layer._wcamFrameRate   = saved.webcamFrameRate  ?? null;
+          layer._wcamZoom        = saved.webcamZoom       ?? 1;
         }
         // Restore lissajous shape
         if (saved.type === 'lissajous' && saved.lissajousShape !== undefined) {
@@ -1954,6 +1966,14 @@ export class LiquidShowVisualizer {
 
     const { turbulence, distortion, reactivity, brightness } = layer.params;
     const audioMod = audioLevel * reactivity;
+    const hw = layer._wcamHWSupport ?? {};
+    const doFlip = layer._wcamFlip ?? true;
+
+    // Canvas-fallback camera params (skipped when hardware handles them)
+    const expStops     = hw.exposure    ? 0 : (layer._wcamExposure   ?? 0);
+    const wcamContrast = hw.contrast    ? 1 : (layer._wcamContrast   ?? 1);
+    const wcamSat      = hw.saturation  ? 1 : (layer._wcamSaturation ?? 1);
+    const canvasZoom   = hw.zoom        ? 1 : (layer._wcamZoom       ?? 1);
 
     // Cover-fit: compute src crop that fills bw×bh
     const vw = video.videoWidth  || bw;
@@ -1969,14 +1989,38 @@ export class LiquidShowVisualizer {
       sy = (vh - sh) / 2;
     }
 
-    // Build brightness filter string from -1…+1 brightness param
-    const brightnessVal = 1 + brightness + audioMod * 0.4;
-    const saturateVal   = 1 + turbulence * 0.6;
-    ctx.filter = `brightness(${brightnessVal.toFixed(2)}) saturate(${saturateVal.toFixed(2)})`;
+    // Canvas zoom fallback: crop to center of the video source
+    if (canvasZoom > 1.01) {
+      const zSW = sw / canvasZoom;
+      const zSH = sh / canvasZoom;
+      sx += (sw - zSW) / 2;
+      sy += (sh - zSH) / 2;
+      sw = zSW;
+      sh = zSH;
+    }
+
+    // Combined CSS filter: layer params + camera canvas fallbacks
+    // Exposure stops → brightness multiplier (1 stop = ×2 brightness)
+    const expMult      = expStops !== 0 ? Math.pow(2, expStops * 0.7) : 1;
+    const brightnessVal = (1 + brightness + audioMod * 0.4) * expMult;
+    const saturateVal   = (1 + turbulence * 0.6) * wcamSat;
+    ctx.filter = `brightness(${brightnessVal.toFixed(2)}) contrast(${wcamContrast.toFixed(2)}) saturate(${saturateVal.toFixed(2)})`;
+
+    // Helper: draw video to a 2D context with optional horizontal flip
+    const drawFrame = (targetCtx, dw, dh) => {
+      if (doFlip) {
+        targetCtx.save();
+        targetCtx.translate(dw, 0);
+        targetCtx.scale(-1, 1);
+        targetCtx.drawImage(video, sx, sy, sw, sh, 0, 0, dw, dh);
+        targetCtx.restore();
+      } else {
+        targetCtx.drawImage(video, sx, sy, sw, sh, 0, 0, dw, dh);
+      }
+    };
 
     if (turbulence > 0.04 || distortion > 0.04) {
-      // Distortion: warp via horizontal scanline displacement using noise
-      // Draw to an offscreen canvas first (flipped), then strip-warp onto ctx
+      // Draw to offscreen canvas first, then scanline-strip warp onto ctx
       if (!layer._wcamTmp || layer._wcamTmp.width !== bw || layer._wcamTmp.height !== bh) {
         layer._wcamTmp = document.createElement('canvas');
         layer._wcamTmp.width = bw;
@@ -1984,15 +2028,9 @@ export class LiquidShowVisualizer {
       }
       const tc = layer._wcamTmp.getContext('2d');
       tc.filter = ctx.filter;
-      // Flip horizontally: mirror around vertical centre
-      tc.save();
-      tc.translate(bw, 0);
-      tc.scale(-1, 1);
-      tc.drawImage(video, sx, sy, sw, sh, 0, 0, bw, bh);
-      tc.restore();
+      drawFrame(tc, bw, bh);
       tc.filter = 'none';
 
-      // Apply wavey displacement: draw in horizontal strips
       const strips = Math.max(8, Math.round(bh / 4));
       const stripH = bh / strips;
       const maxShift = distortion * 20 * (1 + audioMod);
@@ -2004,12 +2042,7 @@ export class LiquidShowVisualizer {
         ctx.drawImage(layer._wcamTmp, 0, y, bw, stripH, shift, y, bw, stripH);
       }
     } else {
-      // Flip horizontally when drawing directly to the layer canvas
-      ctx.save();
-      ctx.translate(bw, 0);
-      ctx.scale(-1, 1);
-      ctx.drawImage(video, sx, sy, sw, sh, 0, 0, bw, bh);
-      ctx.restore();
+      drawFrame(ctx, bw, bh);
       ctx.filter = 'none';
     }
     ctx.filter = 'none';
@@ -2021,7 +2054,15 @@ export class LiquidShowVisualizer {
     layer._webcamStatus = 'connecting';
     this._refreshWebcamUI(layer);
     try {
-      const constraints = { video: deviceId ? { deviceId: { exact: deviceId } } : true, audio: false };
+      const frameRate = layer._wcamFrameRate ?? null;
+      const videoConstraints = {
+        ...(deviceId ? { deviceId: { exact: deviceId } } : {}),
+        ...(frameRate ? { frameRate: { ideal: frameRate } } : {}),
+      };
+      const constraints = {
+        video: Object.keys(videoConstraints).length ? videoConstraints : true,
+        audio: false,
+      };
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
       const video = document.createElement('video');
       video.srcObject = stream;
@@ -2036,11 +2077,41 @@ export class LiquidShowVisualizer {
       if (layer._webcamDeviceId) {
         try { localStorage.setItem('ll-webcam-deviceId', layer._webcamDeviceId); } catch (_) {}
       }
+      // Detect hardware capability support
+      const caps = track?.getCapabilities?.() ?? {};
+      layer._webcamCapabilities = caps;
+      layer._wcamHWSupport = {
+        exposure:   'exposureCompensation' in caps,
+        contrast:   'contrast'   in caps,
+        saturation: 'saturation' in caps,
+        zoom:       'zoom'       in caps,
+      };
+      // Apply initial hardware constraints for any stored values
+      await this._applyWebcamHardwareConstraints(layer);
       layer._webcamStatus = 'active';
     } catch (err) {
       layer._webcamStatus = err.name === 'NotAllowedError' ? 'denied' : 'error';
     }
     this._refreshWebcamUI(layer);
+  }
+
+  // Apply stored camera values to hardware constraints where supported
+  async _applyWebcamHardwareConstraints(layer) {
+    const stream = layer._webcamStream;
+    if (!stream) return;
+    const track = stream.getVideoTracks()[0];
+    if (!track) return;
+    const hw   = layer._wcamHWSupport      ?? {};
+    const caps = layer._webcamCapabilities ?? {};
+    const clamp = (val, cap) => Math.max(cap?.min ?? val, Math.min(cap?.max ?? val, val));
+    const advanced = [];
+    if (hw.exposure   && layer._wcamExposure   != null) advanced.push({ exposureCompensation: clamp(layer._wcamExposure,   caps.exposureCompensation) });
+    if (hw.contrast   && layer._wcamContrast   != null) advanced.push({ contrast:   clamp(layer._wcamContrast,   caps.contrast)   });
+    if (hw.saturation && layer._wcamSaturation != null) advanced.push({ saturation: clamp(layer._wcamSaturation, caps.saturation) });
+    if (hw.zoom       && layer._wcamZoom       != null) advanced.push({ zoom:       clamp(layer._wcamZoom,       caps.zoom)       });
+    if (advanced.length > 0) {
+      try { await track.applyConstraints({ advanced }); } catch (_) {}
+    }
   }
 
   // Stop webcam stream on a layer
@@ -2049,8 +2120,10 @@ export class LiquidShowVisualizer {
       layer._webcamStream.getTracks().forEach(t => t.stop());
       layer._webcamStream = null;
     }
-    layer._webcamVideo  = null;
-    layer._webcamStatus = 'idle';
+    layer._webcamVideo       = null;
+    layer._webcamStatus      = 'idle';
+    layer._webcamCapabilities = null;
+    layer._wcamHWSupport     = {};
     this._refreshWebcamUI(layer);
   }
 
@@ -3886,7 +3959,13 @@ export class LiquidShowVisualizer {
         imgPanMode:    l.type === 'image' ? (l._imgPanMode    ?? 'off') : undefined,
         imgPanSpeed:   l.type === 'image' ? (l._imgPanSpeed   ?? 0.3)   : undefined,
         imgMotionBlur: l.type === 'image' ? (l._imgMotionBlur ?? 0)     : undefined,
-        webcamDeviceId: l.type === 'webcam' ? (l._webcamDeviceId ?? null) : undefined,
+        webcamDeviceId:   l.type === 'webcam' ? (l._webcamDeviceId  ?? null) : undefined,
+        webcamFlip:       l.type === 'webcam' ? (l._wcamFlip        ?? true) : undefined,
+        webcamExposure:   l.type === 'webcam' ? (l._wcamExposure    ?? 0)    : undefined,
+        webcamContrast:   l.type === 'webcam' ? (l._wcamContrast    ?? 1)    : undefined,
+        webcamSaturation: l.type === 'webcam' ? (l._wcamSaturation  ?? 1)    : undefined,
+        webcamFrameRate:  l.type === 'webcam' ? (l._wcamFrameRate   ?? null) : undefined,
+        webcamZoom:       l.type === 'webcam' ? (l._wcamZoom        ?? 1)    : undefined,
         lissajousShape: l.type === 'lissajous' ? (l._lissajousShape || 2) : undefined,
         pulseMode: l.type === 'pulse' ? (l._pulseMode || 'constant') : undefined,
         starsRotSpeed: l.type === 'stars' ? (l._starsRotSpeed ?? 0) : undefined,
@@ -3974,7 +4053,13 @@ export class LiquidShowVisualizer {
         if (saved.imgMotionBlur !== undefined) layer._imgMotionBlur = saved.imgMotionBlur;
       }
       if (saved.type === 'webcam') {
-        layer._webcamDeviceId = saved.webcamDeviceId ?? null;
+        layer._webcamDeviceId  = saved.webcamDeviceId  ?? null;
+        layer._wcamFlip        = saved.webcamFlip       ?? true;
+        layer._wcamExposure    = saved.webcamExposure   ?? 0;
+        layer._wcamContrast    = saved.webcamContrast   ?? 1;
+        layer._wcamSaturation  = saved.webcamSaturation ?? 1;
+        layer._wcamFrameRate   = saved.webcamFrameRate  ?? null;
+        layer._wcamZoom        = saved.webcamZoom       ?? 1;
       }
       if (saved.type === 'lissajous' && saved.lissajousShape !== undefined) {
         layer._lissajousShape = saved.lissajousShape;
@@ -4595,6 +4680,7 @@ export class LiquidShowVisualizer {
     // Webcam controls (only for webcam layers, single-select only)
     if (layer.type === 'webcam' && !isMulti) {
       const wcLabelCss = 'font-size:10px;font-weight:bold;color:#0af;white-space:nowrap;';
+      const wcRowLabelCss = 'font-size:10px;color:#8cf;white-space:nowrap;min-width:72px;';
 
       // Status row
       const statusRow = document.createElement('div');
@@ -4620,7 +4706,6 @@ export class LiquidShowVisualizer {
       deviceLabel.textContent = 'Camera:';
       const deviceSelect = document.createElement('select');
       deviceSelect.className = 'll-webcam-select';
-      // Populate devices async
       const defaultOpt = document.createElement('option');
       defaultOpt.value = '';
       defaultOpt.textContent = 'Default';
@@ -4634,7 +4719,6 @@ export class LiquidShowVisualizer {
           if (d.deviceId === layer._webcamDeviceId) opt.selected = true;
           deviceSelect.appendChild(opt);
         });
-        // If no labels yet (before first permission grant) we only have default
         if (devices.length === 0) {
           const noOpt = document.createElement('option');
           noOpt.value = '';
@@ -4646,7 +4730,6 @@ export class LiquidShowVisualizer {
       deviceSelect.addEventListener('change', () => {
         layer._webcamDeviceId = deviceSelect.value || null;
         if (layer._webcamStatus === 'active') {
-          // Restart with new device
           this._startWebcam(layer, layer._webcamDeviceId);
         }
       });
@@ -4674,6 +4757,126 @@ export class LiquidShowVisualizer {
       });
       connectRow.appendChild(connectBtn);
       container.appendChild(connectRow);
+
+      // ── Camera Settings ──────────────────────────────────────────
+      const camSection = document.createElement('div');
+      camSection.className = 'll-webcam-settings';
+
+      const camHeader = document.createElement('div');
+      camHeader.className = 'll-webcam-settings-header';
+      camHeader.textContent = 'Camera Settings';
+      camSection.appendChild(camHeader);
+
+      // --- Flip toggle ---
+      const flipRow = document.createElement('div');
+      flipRow.className = 'll-webcam-row';
+      const flipLbl = document.createElement('span');
+      flipLbl.style.cssText = wcRowLabelCss;
+      flipLbl.textContent = 'Flip:';
+      const flipBtn = document.createElement('button');
+      const curFlip = layer._wcamFlip ?? true;
+      flipBtn.className = 'll-toggle' + (curFlip ? ' active' : '');
+      flipBtn.textContent = curFlip ? 'Mirrored' : 'Normal';
+      flipBtn.title = 'Mirror the feed horizontally';
+      flipBtn.addEventListener('click', () => {
+        if (this._isLayerLocked(this.selectedLayerIndex)) return;
+        layer._wcamFlip = !(layer._wcamFlip ?? true);
+        flipBtn.classList.toggle('active', layer._wcamFlip);
+        flipBtn.textContent = layer._wcamFlip ? 'Mirrored' : 'Normal';
+      });
+      flipRow.appendChild(flipLbl);
+      flipRow.appendChild(flipBtn);
+      camSection.appendChild(flipRow);
+
+      // --- Frame Rate ---
+      const fpsRow = document.createElement('div');
+      fpsRow.className = 'll-webcam-row';
+      fpsRow.style.flexWrap = 'wrap';
+      const fpsLbl = document.createElement('span');
+      fpsLbl.style.cssText = wcRowLabelCss;
+      fpsLbl.textContent = 'Frame Rate:';
+      fpsRow.appendChild(fpsLbl);
+      const fpsBtnWrap = document.createElement('div');
+      fpsBtnWrap.style.cssText = 'display:flex;gap:3px;flex-wrap:wrap;';
+      const fpsOptions = [null, 60, 30, 24, 15, 8];
+      fpsOptions.forEach(fps => {
+        const btn = document.createElement('button');
+        btn.className = 'll-toggle' + ((layer._wcamFrameRate ?? null) === fps ? ' active' : '');
+        btn.textContent = fps === null ? 'Auto' : `${fps}`;
+        btn.style.cssText = 'padding:2px 5px;font-size:9px;';
+        btn.title = fps === null ? 'Default frame rate' : `${fps} fps`;
+        btn.addEventListener('click', () => {
+          if (this._isLayerLocked(this.selectedLayerIndex)) return;
+          layer._wcamFrameRate = fps;
+          fpsBtnWrap.querySelectorAll('.ll-toggle').forEach((b, bi) => {
+            b.classList.toggle('active', fpsOptions[bi] === fps);
+          });
+          // Restart stream to apply new frame rate if active
+          if (layer._webcamStatus === 'active') {
+            this._startWebcam(layer, layer._webcamDeviceId);
+          }
+        });
+        fpsBtnWrap.appendChild(btn);
+      });
+      fpsRow.appendChild(fpsBtnWrap);
+      camSection.appendChild(fpsRow);
+
+      // --- Slider helper ---
+      const makeWcamSlider = (labelText, prop, min, max, step, defaultVal, fmtFn) => {
+        const row = document.createElement('div');
+        row.className = 'll-webcam-row';
+        row.style.gap = '4px';
+        const lbl = document.createElement('span');
+        lbl.style.cssText = wcRowLabelCss;
+        lbl.textContent = labelText + ':';
+        const slider = document.createElement('input');
+        slider.type = 'range';
+        slider.className = 'll-row-slider';
+        slider.min = String(min);
+        slider.max = String(max);
+        slider.step = String(step);
+        slider.value = String(layer[prop] ?? defaultVal);
+        const valEl = document.createElement('span');
+        valEl.style.cssText = 'font-size:10px;color:#aaa;min-width:36px;text-align:right;flex-shrink:0;';
+        valEl.textContent = fmtFn(parseFloat(slider.value));
+        slider.addEventListener('input', () => {
+          if (this._isLayerLocked(this.selectedLayerIndex)) return;
+          const val = parseFloat(slider.value);
+          layer[prop] = val;
+          valEl.textContent = fmtFn(val);
+          this._applyWebcamHardwareConstraints(layer);
+        });
+        row.appendChild(lbl);
+        row.appendChild(slider);
+        row.appendChild(valEl);
+        return row;
+      };
+
+      // --- Exposure ---
+      camSection.appendChild(makeWcamSlider(
+        'Exposure', '_wcamExposure', -3, 3, 0.25, 0,
+        v => (v >= 0 ? '+' : '') + v.toFixed(2) + ' EV'
+      ));
+
+      // --- Contrast ---
+      camSection.appendChild(makeWcamSlider(
+        'Contrast', '_wcamContrast', 0, 2, 0.05, 1,
+        v => v.toFixed(2) + '×'
+      ));
+
+      // --- Saturation ---
+      camSection.appendChild(makeWcamSlider(
+        'Saturation', '_wcamSaturation', 0, 2, 0.05, 1,
+        v => v.toFixed(2) + '×'
+      ));
+
+      // --- Zoom ---
+      camSection.appendChild(makeWcamSlider(
+        'Zoom', '_wcamZoom', 1, 4, 0.1, 1,
+        v => v.toFixed(1) + '×'
+      ));
+
+      container.appendChild(camSection);
     }
 
     // Pulse mode selector (only for pulse layers, single-select only)
