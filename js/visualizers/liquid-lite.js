@@ -17,7 +17,8 @@ export class LiquidLiteVisualizer {
     this.canvas = canvas;
     this.engine = new LiquidShowVisualizer(canvas);
     // Load Rainbow RPM as the default preset on start
-    const defaultPreset = LL_PRESETS.find(p => p.id === 'rainbow-rpm') || LL_PRESETS[0];
+    const londonTube = LL_PRESETS.find(p => p.id === 'rainbow-rpm');
+    const defaultPreset = londonTube || LL_PRESETS[0];
     if (defaultPreset) {
       this._currentPresetId = defaultPreset.id;
       this.engine.setState(JSON.parse(JSON.stringify(defaultPreset.vizState)));
@@ -44,44 +45,31 @@ export class LiquidLiteVisualizer {
       presetId: this._currentPresetId,
     }];
     this._liteHistoryIdx = 0;
-
-    // Touch gesture state: translate only (pinch controls _liteScale, not CSS scale)
-    this._gestureTx = 0;
-    this._gestureTy = 0;
-    this._gestureHandlers = null;
   }
 
   draw(freq, time) {
-    // --- Temporarily apply all multipliers, draw, then restore ---
-
-    // Master speed
-    const savedSpeed = this.engine.globals.speed;
-    if (this._liteSpeed !== 1.0) this.engine.globals.speed = savedSpeed * this._liteSpeed;
-
-    // Per-layer scale (pinch gesture) — clamped to param range [0.1, 3.0]
-    const savedScales = this._liteScale !== 1.0
-      ? this.engine.layers.map(l => l.params.scale) : null;
-    if (savedScales) {
-      this.engine.layers.forEach(l => {
-        l.params.scale = Math.max(0.1, Math.min(3.0, l.params.scale * this._liteScale));
-      });
+    // Temporarily apply master speed multiplier to global speed
+    const savedGlobalSpeed = this.engine.globals.speed;
+    if (this._liteSpeed !== 1.0) {
+      this.engine.globals.speed = savedGlobalSpeed * this._liteSpeed;
     }
 
-    // Per-layer turbulence (intensity slider)
-    const savedTurb = this._globalIntensity !== 1.0
-      ? this.engine.layers.map(l => l.params.turbulence) : null;
-    if (savedTurb) {
+    // Apply global intensity multiplier to all layer turbulence values
+    if (this._globalIntensity !== 1.0) {
+      const saved = this.engine.layers.map(l => l.params.turbulence);
       this.engine.layers.forEach(l => {
         l.params.turbulence = Math.min(1, l.params.turbulence * this._globalIntensity);
       });
+      this.engine.draw(freq, time);
+      this.engine.layers.forEach((l, i) => l.params.turbulence = saved[i]);
+    } else {
+      this.engine.draw(freq, time);
     }
 
-    this.engine.draw(freq, time);
-
-    // Restore everything
-    if (this._liteSpeed !== 1.0) this.engine.globals.speed = savedSpeed;
-    if (savedScales) this.engine.layers.forEach((l, i) => l.params.scale = savedScales[i]);
-    if (savedTurb)   this.engine.layers.forEach((l, i) => l.params.turbulence = savedTurb[i]);
+    // Restore global speed
+    if (this._liteSpeed !== 1.0) {
+      this.engine.globals.speed = savedGlobalSpeed;
+    }
   }
 
   reset() { this.engine.reset(); }
@@ -92,11 +80,13 @@ export class LiquidLiteVisualizer {
   // --- History ---
 
   _pushLiteHistory() {
+    // Truncate any forward states
     this._liteHistory = this._liteHistory.slice(0, this._liteHistoryIdx + 1);
     this._liteHistory.push({
       state: JSON.stringify(this.engine.getState()),
       presetId: this._currentPresetId,
     });
+    // Keep max 10
     if (this._liteHistory.length > 10) this._liteHistory.shift();
     this._liteHistoryIdx = this._liteHistory.length - 1;
     this._updateNavBtns();
@@ -150,7 +140,7 @@ export class LiquidLiteVisualizer {
           await navigator.share({ files: [file], title: filename });
           return;
         } catch (e) {
-          if (e.name === 'AbortError') return; // user cancelled
+          if (e.name === 'AbortError') return; // user cancelled — no fallback needed
         }
       }
     }
@@ -166,106 +156,6 @@ export class LiquidLiteVisualizer {
     URL.revokeObjectURL(url);
   }
 
-  // --- Touch gesture: pan (single finger) + pinch-zoom (two finger) ---
-  // Applies a CSS matrix() transform to the canvas element.
-  // .cam-ui has pointer-events:none so all unoccupied canvas area receives touches.
-
-  _attachGestures() {
-    const canvas = this.canvas;
-    canvas.style.touchAction = 'none'; // suppress browser pan/zoom on the canvas
-
-    // Build a Map<identifier, {x,y}> from a TouchList
-    const getMap = (touchList) => {
-      const m = new Map();
-      for (const t of touchList) m.set(t.identifier, { x: t.clientX, y: t.clientY });
-      return m;
-    };
-
-    let prevTouches = new Map();
-
-    const applyGesture = (prev, curr) => {
-      // Only process touches that exist in both snapshots
-      const ids = [...curr.keys()].filter(id => prev.has(id));
-      if (ids.length === 0) return;
-
-      if (ids.length === 1) {
-        // ── Single-finger drag: pan the canvas ──
-        const id = ids[0];
-        this._gestureTx += curr.get(id).x - prev.get(id).x;
-        this._gestureTy += curr.get(id).y - prev.get(id).y;
-
-      } else {
-        // ── Two-finger pinch: drive per-layer scale via _liteScale ──
-        // Canvas stays full-screen — no CSS zoom applied.
-        const id0 = ids[0], id1 = ids[1];
-        const p0 = prev.get(id0), p1 = prev.get(id1);
-        const c0 = curr.get(id0), c1 = curr.get(id1);
-
-        const prevDist = Math.hypot(p1.x - p0.x, p1.y - p0.y);
-        const currDist = Math.hypot(c1.x - c0.x, c1.y - c0.y);
-        const r = prevDist > 2 ? currDist / prevDist : 1;
-
-        // 0.2× = small/dense patterns, 5× = large/expansive patterns
-        this._liteScale = Math.max(0.2, Math.min(5.0, this._liteScale * r));
-
-        // Also pan by midpoint movement so pinch feels anchored
-        const prevCx = (p0.x + p1.x) / 2, prevCy = (p0.y + p1.y) / 2;
-        const currCx = (c0.x + c1.x) / 2, currCy = (c0.y + c1.y) / 2;
-        this._gestureTx += currCx - prevCx;
-        this._gestureTy += currCy - prevCy;
-      }
-
-      this._applyGestureTransform();
-    };
-
-    const onStart = (e) => {
-      e.preventDefault();
-      prevTouches = getMap(e.touches);
-    };
-
-    const onMove = (e) => {
-      e.preventDefault();
-      const curr = getMap(e.touches);
-      applyGesture(prevTouches, curr);
-      prevTouches = curr;
-    };
-
-    const onEnd = (e) => {
-      // Snapshot remaining touches so the next move has a valid baseline
-      prevTouches = getMap(e.touches);
-    };
-
-    canvas.addEventListener('touchstart',  onStart, { passive: false });
-    canvas.addEventListener('touchmove',   onMove,  { passive: false });
-    canvas.addEventListener('touchend',    onEnd,   { passive: false });
-    canvas.addEventListener('touchcancel', onEnd,   { passive: false });
-
-    this._gestureHandlers = { onStart, onMove, onEnd };
-  }
-
-  _applyGestureTransform() {
-    // Scale is applied to layer params in draw(), not here — canvas stays full-screen.
-    this.canvas.style.transformOrigin = '0 0';
-    this.canvas.style.transform = `matrix(1,0,0,1,${this._gestureTx},${this._gestureTy})`;
-  }
-
-  _detachGestures() {
-    if (!this._gestureHandlers) return;
-    const { onStart, onMove, onEnd } = this._gestureHandlers;
-    this.canvas.removeEventListener('touchstart',  onStart);
-    this.canvas.removeEventListener('touchmove',   onMove);
-    this.canvas.removeEventListener('touchend',    onEnd);
-    this.canvas.removeEventListener('touchcancel', onEnd);
-    this._gestureHandlers = null;
-    // Reset canvas transform and restore browser touch handling
-    this.canvas.style.transform = '';
-    this.canvas.style.transformOrigin = '';
-    this.canvas.style.touchAction = '';
-    this._gestureTx = 0;
-    this._gestureTy = 0;
-    // Note: _liteScale persists — it's a user preference, not tied to the gesture session
-  }
-
   // --- Panel UI (Camera mode inspired) ---
 
   buildPanel(controlPanelEl, app) {
@@ -279,9 +169,6 @@ export class LiquidLiteVisualizer {
     panel.className = 'cam-ui';
     this.panelEl = panel;
     document.body.appendChild(panel);
-
-    // Attach canvas touch gestures (pan + pinch-zoom)
-    this._attachGestures();
 
     // --- Left floating stack ---
     const leftStack = document.createElement('div');
@@ -363,6 +250,7 @@ export class LiquidLiteVisualizer {
     this._presetSelect = presetSelector.querySelector('select');
     if (this._presetSelect) {
       if (this._currentPresetId) this._presetSelect.value = this._currentPresetId;
+      // Track current preset ID for history
       this._presetSelect.addEventListener('change', () => {
         this._currentPresetId = this._presetSelect.value || null;
       });
@@ -399,6 +287,7 @@ export class LiquidLiteVisualizer {
     dlBtn.addEventListener('click', () => this._downloadJSON());
     bottomBar.appendChild(dlBtn);
 
+    // Sync button enabled states
     this._updateNavBtns();
 
     this._bottomBar = bottomBar;
@@ -442,7 +331,7 @@ export class LiquidLiteVisualizer {
     return btn;
   }
 
-  // --- Orientation layout ---
+  // --- Orientation layout (same pattern as Camera mode) ---
 
   _applyOrientationLayout() {
     if (!this.panelEl) return;
@@ -459,9 +348,9 @@ export class LiquidLiteVisualizer {
       this._rightStack.style.right = `${Math.max(insets.right, 12) + 8}px`;
     }
     if (this._bottomBar) {
-      this._bottomBar.style.paddingLeft  = `${Math.max(insets.left,   12) + 16}px`;
-      this._bottomBar.style.paddingRight = `${Math.max(insets.right,  12) + 16}px`;
-      this._bottomBar.style.paddingBottom = `${Math.max(insets.bottom, 8) +  8}px`;
+      this._bottomBar.style.paddingLeft = `${Math.max(insets.left, 12) + 16}px`;
+      this._bottomBar.style.paddingRight = `${Math.max(insets.right, 12) + 16}px`;
+      this._bottomBar.style.paddingBottom = `${Math.max(insets.bottom, 8) + 8}px`;
     }
 
     if (isLandscape && this._leftStack && this._rightStack) {
@@ -479,10 +368,10 @@ export class LiquidLiteVisualizer {
     document.body.appendChild(probe);
     const cs = getComputedStyle(probe);
     const insets = {
-      top:    parseFloat(cs.paddingTop)    || 0,
-      right:  parseFloat(cs.paddingRight)  || 0,
+      top: parseFloat(cs.paddingTop) || 0,
+      right: parseFloat(cs.paddingRight) || 0,
       bottom: parseFloat(cs.paddingBottom) || 0,
-      left:   parseFloat(cs.paddingLeft)   || 0,
+      left: parseFloat(cs.paddingLeft) || 0,
     };
     probe.remove();
     return insets;
@@ -498,7 +387,6 @@ export class LiquidLiteVisualizer {
 
   destroyPanel() {
     this._stopLevelMonitor();
-    this._detachGestures();
     // Do NOT stop the mic — it persists across mode switches
     if (this._app) this._app.mic.onStateChange = null;
     if (this._orientationHandler) {
@@ -532,6 +420,7 @@ export class LiquidLiteVisualizer {
     if (!this._micBtn) return;
     this._micBtn.classList.toggle('mic-active', !!active);
     if (!active) this._micBtn.style.removeProperty('--mic-level');
+    // Update gain slider value when mic reconnects
     if (active && this._gainSlider && this._app) {
       this._gainSlider.slider.value = this._app.mic.gainValue;
     }
