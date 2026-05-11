@@ -45,36 +45,43 @@ export class LiquidLiteVisualizer {
     }];
     this._liteHistoryIdx = 0;
 
-    // Touch gesture state (pan + pinch-zoom via CSS matrix transform)
-    this._gestureScale = 1.0;
+    // Touch gesture state: translate only (pinch controls _liteScale, not CSS scale)
     this._gestureTx = 0;
     this._gestureTy = 0;
     this._gestureHandlers = null;
   }
 
   draw(freq, time) {
-    // Temporarily apply master speed multiplier to global speed
-    const savedGlobalSpeed = this.engine.globals.speed;
-    if (this._liteSpeed !== 1.0) {
-      this.engine.globals.speed = savedGlobalSpeed * this._liteSpeed;
+    // --- Temporarily apply all multipliers, draw, then restore ---
+
+    // Master speed
+    const savedSpeed = this.engine.globals.speed;
+    if (this._liteSpeed !== 1.0) this.engine.globals.speed = savedSpeed * this._liteSpeed;
+
+    // Per-layer scale (pinch gesture) — clamped to param range [0.1, 3.0]
+    const savedScales = this._liteScale !== 1.0
+      ? this.engine.layers.map(l => l.params.scale) : null;
+    if (savedScales) {
+      this.engine.layers.forEach(l => {
+        l.params.scale = Math.max(0.1, Math.min(3.0, l.params.scale * this._liteScale));
+      });
     }
 
-    // Apply global intensity multiplier to all layer turbulence values
-    if (this._globalIntensity !== 1.0) {
-      const saved = this.engine.layers.map(l => l.params.turbulence);
+    // Per-layer turbulence (intensity slider)
+    const savedTurb = this._globalIntensity !== 1.0
+      ? this.engine.layers.map(l => l.params.turbulence) : null;
+    if (savedTurb) {
       this.engine.layers.forEach(l => {
         l.params.turbulence = Math.min(1, l.params.turbulence * this._globalIntensity);
       });
-      this.engine.draw(freq, time);
-      this.engine.layers.forEach((l, i) => l.params.turbulence = saved[i]);
-    } else {
-      this.engine.draw(freq, time);
     }
 
-    // Restore global speed
-    if (this._liteSpeed !== 1.0) {
-      this.engine.globals.speed = savedGlobalSpeed;
-    }
+    this.engine.draw(freq, time);
+
+    // Restore everything
+    if (this._liteSpeed !== 1.0) this.engine.globals.speed = savedSpeed;
+    if (savedScales) this.engine.layers.forEach((l, i) => l.params.scale = savedScales[i]);
+    if (savedTurb)   this.engine.layers.forEach((l, i) => l.params.turbulence = savedTurb[i]);
   }
 
   reset() { this.engine.reset(); }
@@ -188,29 +195,24 @@ export class LiquidLiteVisualizer {
         this._gestureTy += curr.get(id).y - prev.get(id).y;
 
       } else {
-        // ── Two-finger pinch: scale + pan ──
+        // ── Two-finger pinch: drive per-layer scale via _liteScale ──
+        // Canvas stays full-screen — no CSS zoom applied.
         const id0 = ids[0], id1 = ids[1];
         const p0 = prev.get(id0), p1 = prev.get(id1);
         const c0 = curr.get(id0), c1 = curr.get(id1);
 
         const prevDist = Math.hypot(p1.x - p0.x, p1.y - p0.y);
         const currDist = Math.hypot(c1.x - c0.x, c1.y - c0.y);
-        // Ratio of new to previous span; guard against near-zero distances
         const r = prevDist > 2 ? currDist / prevDist : 1;
 
+        // 0.2× = small/dense patterns, 5× = large/expansive patterns
+        this._liteScale = Math.max(0.2, Math.min(5.0, this._liteScale * r));
+
+        // Also pan by midpoint movement so pinch feels anchored
         const prevCx = (p0.x + p1.x) / 2, prevCy = (p0.y + p1.y) / 2;
         const currCx = (c0.x + c1.x) / 2, currCy = (c0.y + c1.y) / 2;
-
-        // Clamp scale so user can't shrink below 0.5× or blow past 5×
-        const newScale = Math.max(0.5, Math.min(5.0, this._gestureScale * r));
-
-        // Solve for tx/ty that keeps the canvas point under prevCx/prevCy
-        // pinned to prevCx/prevCy, then add the center's own translation.
-        const Px = (prevCx - this._gestureTx) / this._gestureScale;
-        const Py = (prevCy - this._gestureTy) / this._gestureScale;
-        this._gestureTx = prevCx - newScale * Px + (currCx - prevCx);
-        this._gestureTy = prevCy - newScale * Py + (currCy - prevCy);
-        this._gestureScale = newScale;
+        this._gestureTx += currCx - prevCx;
+        this._gestureTy += currCy - prevCy;
       }
 
       this._applyGestureTransform();
@@ -242,9 +244,9 @@ export class LiquidLiteVisualizer {
   }
 
   _applyGestureTransform() {
-    const s = this._gestureScale;
+    // Scale is applied to layer params in draw(), not here — canvas stays full-screen.
     this.canvas.style.transformOrigin = '0 0';
-    this.canvas.style.transform = `matrix(${s},0,0,${s},${this._gestureTx},${this._gestureTy})`;
+    this.canvas.style.transform = `matrix(1,0,0,1,${this._gestureTx},${this._gestureTy})`;
   }
 
   _detachGestures() {
@@ -255,13 +257,13 @@ export class LiquidLiteVisualizer {
     this.canvas.removeEventListener('touchend',    onEnd);
     this.canvas.removeEventListener('touchcancel', onEnd);
     this._gestureHandlers = null;
-    // Reset transform and restore browser touch handling
+    // Reset canvas transform and restore browser touch handling
     this.canvas.style.transform = '';
     this.canvas.style.transformOrigin = '';
     this.canvas.style.touchAction = '';
-    this._gestureScale = 1.0;
     this._gestureTx = 0;
     this._gestureTy = 0;
+    // Note: _liteScale persists — it's a user preference, not tied to the gesture session
   }
 
   // --- Panel UI (Camera mode inspired) ---
