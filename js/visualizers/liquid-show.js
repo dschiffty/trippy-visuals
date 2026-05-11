@@ -1976,7 +1976,7 @@ export class LiquidShowVisualizer {
 
     if (turbulence > 0.04 || distortion > 0.04) {
       // Distortion: warp via horizontal scanline displacement using noise
-      // Draw to an offscreen canvas first, then read pixels
+      // Draw to an offscreen canvas first (flipped), then strip-warp onto ctx
       if (!layer._wcamTmp || layer._wcamTmp.width !== bw || layer._wcamTmp.height !== bh) {
         layer._wcamTmp = document.createElement('canvas');
         layer._wcamTmp.width = bw;
@@ -1984,7 +1984,12 @@ export class LiquidShowVisualizer {
       }
       const tc = layer._wcamTmp.getContext('2d');
       tc.filter = ctx.filter;
+      // Flip horizontally: mirror around vertical centre
+      tc.save();
+      tc.translate(bw, 0);
+      tc.scale(-1, 1);
       tc.drawImage(video, sx, sy, sw, sh, 0, 0, bw, bh);
+      tc.restore();
       tc.filter = 'none';
 
       // Apply wavey displacement: draw in horizontal strips
@@ -1999,7 +2004,12 @@ export class LiquidShowVisualizer {
         ctx.drawImage(layer._wcamTmp, 0, y, bw, stripH, shift, y, bw, stripH);
       }
     } else {
+      // Flip horizontally when drawing directly to the layer canvas
+      ctx.save();
+      ctx.translate(bw, 0);
+      ctx.scale(-1, 1);
       ctx.drawImage(video, sx, sy, sw, sh, 0, 0, bw, bh);
+      ctx.restore();
       ctx.filter = 'none';
     }
     ctx.filter = 'none';
