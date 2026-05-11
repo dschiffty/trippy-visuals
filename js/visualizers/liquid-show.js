@@ -2155,7 +2155,7 @@ export class LiquidShowVisualizer {
       const btn = layer._webcamConnectBtn;
       if (status === 'active') {
         btn.textContent = 'Stop';
-        btn.classList.add('active');
+        btn.classList.remove('active');
         btn.disabled = false;
       } else {
         btn.textContent = status === 'connecting' ? '…' : 'Connect';
@@ -4748,7 +4748,7 @@ export class LiquidShowVisualizer {
       const connectRow = document.createElement('div');
       connectRow.className = 'll-webcam-row';
       const connectBtn = document.createElement('button');
-      connectBtn.className = 'll-toggle' + (status === 'active' ? ' active' : '');
+      connectBtn.className = 'll-toggle';
       connectBtn.textContent = status === 'active' ? 'Stop' : (status === 'connecting' ? '…' : 'Connect');
       connectBtn.disabled = status === 'connecting';
       connectBtn.title = status === 'active' ? 'Stop webcam feed' : 'Start webcam feed';
