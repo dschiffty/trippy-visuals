@@ -2186,6 +2186,34 @@ html, body {
   max-width: 50px;
 }
 
+/* ---- Webcam Layer Controls ---- */
+.ll-webcam-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  flex-wrap: wrap;
+}
+
+.ll-webcam-status {
+  font-size: 10px;
+  color: #ccc;
+}
+
+.ll-webcam-select {
+  font-family: inherit;
+  font-size: 10px;
+  background: #1a1a1a;
+  color: #eee;
+  border: 1px solid #555;
+  padding: 1px 4px;
+  height: 18px;
+  border-radius: 2px;
+  flex: 1;
+  min-width: 0;
+  cursor: pointer;
+}
+
 .ll-layer-name {
   font-size: 10px;
   font-weight: bold;

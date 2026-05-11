@@ -78,8 +78,8 @@ function hslToRgb(h, s, l) {
 }
 
 // --- Layer Type Constants ---
-const LAYER_TYPES = ['wash', 'blob', 'marbling', 'bubble', 'image', 'scope', 'pulse', 'lissajous', 'stars', 'lightning'];
-const LAYER_TYPE_LABELS = { wash: 'Wash', blob: 'Blob', marbling: 'Marbling', bubble: 'Bubble', image: 'Image', scope: 'Scope', pulse: 'Pulse', lissajous: 'Lissajous', stars: 'Stars', lightning: 'Lightning' };
+const LAYER_TYPES = ['wash', 'blob', 'marbling', 'bubble', 'image', 'scope', 'pulse', 'lissajous', 'stars', 'lightning', 'webcam'];
+const LAYER_TYPE_LABELS = { wash: 'Wash', blob: 'Blob', marbling: 'Marbling', bubble: 'Bubble', image: 'Image', scope: 'Scope', pulse: 'Pulse', lissajous: 'Lissajous', stars: 'Stars', lightning: 'Lightning', webcam: 'Webcam' };
 // Layer types that support the canvas-level spin rotation controls
 const SPIN_LAYER_TYPES = new Set(['wash', 'bubble', 'pulse', 'image', 'lissajous']);
 const BLEND_MODES = [
@@ -91,7 +91,7 @@ const BLEND_MODES = [
   { value: 'difference', label: 'Difference' },
 ];
 const AUDIO_SOURCES = ['none', 'bass', 'mids', 'highs', 'full'];
-const LAYER_SCALES = { wash: 8, blob: 6, marbling: 7, bubble: 7, image: 4, scope: 1, pulse: 1, lissajous: 1, stars: 1, lightning: 1 };
+const LAYER_SCALES = { wash: 8, blob: 6, marbling: 7, bubble: 7, image: 4, scope: 1, pulse: 1, lissajous: 1, stars: 1, lightning: 1, webcam: 1 };
 
 // --- Lissajous Shape Definitions (from lissajous.js) ---
 const LISSAJOUS_SHAPES = [
@@ -348,6 +348,7 @@ export class LiquidShowVisualizer {
         imgPanMode:    l.type === 'image' ? (l._imgPanMode    ?? 'off') : undefined,
         imgPanSpeed:   l.type === 'image' ? (l._imgPanSpeed   ?? 0.3)   : undefined,
         imgMotionBlur: l.type === 'image' ? (l._imgMotionBlur ?? 0)     : undefined,
+        webcamDeviceId: l.type === 'webcam' ? (l._webcamDeviceId ?? null) : undefined,
         lissajousShape: l.type === 'lissajous' ? (l._lissajousShape || 2) : undefined,
         pulseMode: l.type === 'pulse' ? (l._pulseMode || 'constant') : undefined,
         starsRotSpeed: l.type === 'stars' ? (l._starsRotSpeed ?? 0) : undefined,
@@ -411,6 +412,10 @@ export class LiquidShowVisualizer {
           if (saved.imgPanMode    !== undefined) layer._imgPanMode    = saved.imgPanMode;
           if (saved.imgPanSpeed   !== undefined) layer._imgPanSpeed   = saved.imgPanSpeed;
           if (saved.imgMotionBlur !== undefined) layer._imgMotionBlur = saved.imgMotionBlur;
+        }
+        // Restore webcam device preference (stream will be started by buildPanel auto-reconnect)
+        if (saved.type === 'webcam') {
+          layer._webcamDeviceId = saved.webcamDeviceId ?? null;
         }
         // Restore lissajous shape
         if (saved.type === 'lissajous' && saved.lissajousShape !== undefined) {
@@ -1928,6 +1933,157 @@ export class LiquidShowVisualizer {
     ctx.globalAlpha = 1;
   }
 
+  // --- Webcam Layer ---
+
+  _renderWebcam(layer, ctx, bw, bh, time, audioLevel) {
+    const video = layer._webcamVideo;
+    if (!video || video.readyState < 2) {
+      // No stream yet — draw dark placeholder
+      ctx.clearRect(0, 0, bw, bh);
+      ctx.fillStyle = 'rgba(0,0,0,0.85)';
+      ctx.fillRect(0, 0, bw, bh);
+      ctx.fillStyle = 'rgba(255,255,255,0.25)';
+      ctx.font = `${Math.round(bh * 0.05)}px sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('📷 No webcam feed', bw / 2, bh / 2);
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'alphabetic';
+      return;
+    }
+
+    const { turbulence, distortion, reactivity, brightness } = layer.params;
+    const audioMod = audioLevel * reactivity;
+
+    // Cover-fit: compute src crop that fills bw×bh
+    const vw = video.videoWidth  || bw;
+    const vh = video.videoHeight || bh;
+    const vAspect = vw / vh;
+    const bAspect = bw / bh;
+    let sx = 0, sy = 0, sw = vw, sh = vh;
+    if (vAspect > bAspect) {
+      sw = vh * bAspect;
+      sx = (vw - sw) / 2;
+    } else {
+      sh = vw / bAspect;
+      sy = (vh - sh) / 2;
+    }
+
+    // Build brightness filter string from -1…+1 brightness param
+    const brightnessVal = 1 + brightness + audioMod * 0.4;
+    const saturateVal   = 1 + turbulence * 0.6;
+    ctx.filter = `brightness(${brightnessVal.toFixed(2)}) saturate(${saturateVal.toFixed(2)})`;
+
+    if (turbulence > 0.04 || distortion > 0.04) {
+      // Distortion: warp via horizontal scanline displacement using noise
+      // Draw to an offscreen canvas first, then read pixels
+      if (!layer._wcamTmp || layer._wcamTmp.width !== bw || layer._wcamTmp.height !== bh) {
+        layer._wcamTmp = document.createElement('canvas');
+        layer._wcamTmp.width = bw;
+        layer._wcamTmp.height = bh;
+      }
+      const tc = layer._wcamTmp.getContext('2d');
+      tc.filter = ctx.filter;
+      tc.drawImage(video, sx, sy, sw, sh, 0, 0, bw, bh);
+      tc.filter = 'none';
+
+      // Apply wavey displacement: draw in horizontal strips
+      const strips = Math.max(8, Math.round(bh / 4));
+      const stripH = bh / strips;
+      const maxShift = distortion * 20 * (1 + audioMod);
+      ctx.filter = 'none';
+      ctx.clearRect(0, 0, bw, bh);
+      for (let s = 0; s < strips; s++) {
+        const y = s * stripH;
+        const shift = noise2D(s * 0.4 + layer.offset.x * 0.01, time * turbulence * 0.4 + layer.offset.y * 0.01) * maxShift;
+        ctx.drawImage(layer._wcamTmp, 0, y, bw, stripH, shift, y, bw, stripH);
+      }
+    } else {
+      ctx.drawImage(video, sx, sy, sw, sh, 0, 0, bw, bh);
+      ctx.filter = 'none';
+    }
+    ctx.filter = 'none';
+  }
+
+  // Start webcam stream on a layer
+  async _startWebcam(layer, deviceId) {
+    this._stopWebcam(layer);
+    layer._webcamStatus = 'connecting';
+    this._refreshWebcamUI(layer);
+    try {
+      const constraints = { video: deviceId ? { deviceId: { exact: deviceId } } : true, audio: false };
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      const video = document.createElement('video');
+      video.srcObject = stream;
+      video.muted = true;
+      video.playsInline = true;
+      await video.play();
+      layer._webcamStream = stream;
+      layer._webcamVideo  = video;
+      // Store the actual device that was granted
+      const track = stream.getVideoTracks()[0];
+      layer._webcamDeviceId = track?.getSettings()?.deviceId ?? deviceId ?? null;
+      if (layer._webcamDeviceId) {
+        try { localStorage.setItem('ll-webcam-deviceId', layer._webcamDeviceId); } catch (_) {}
+      }
+      layer._webcamStatus = 'active';
+    } catch (err) {
+      layer._webcamStatus = err.name === 'NotAllowedError' ? 'denied' : 'error';
+    }
+    this._refreshWebcamUI(layer);
+  }
+
+  // Stop webcam stream on a layer
+  _stopWebcam(layer) {
+    if (layer._webcamStream) {
+      layer._webcamStream.getTracks().forEach(t => t.stop());
+      layer._webcamStream = null;
+    }
+    layer._webcamVideo  = null;
+    layer._webcamStatus = 'idle';
+    this._refreshWebcamUI(layer);
+  }
+
+  // Stop all active webcam streams (called from destroyPanel)
+  _stopAllWebcamLayers() {
+    this.layers.forEach(l => {
+      if (l.type === 'webcam' && l._webcamStream) {
+        l._webcamStream.getTracks().forEach(t => t.stop());
+        l._webcamStream = null;
+        l._webcamVideo  = null;
+        l._webcamStatus = 'idle';
+      }
+    });
+  }
+
+  // Refresh just the webcam status indicator + button in the layer knobs panel
+  _refreshWebcamUI(layer) {
+    if (!layer._webcamStatusEl) return;
+    const status = layer._webcamStatus || 'idle';
+    const labels = { idle: '—', connecting: '⏳ Connecting…', active: '🟢 Live', denied: '🔴 Permission denied', error: '🔴 Error' };
+    layer._webcamStatusEl.textContent = labels[status] ?? status;
+    if (layer._webcamConnectBtn) {
+      if (status === 'active') {
+        layer._webcamConnectBtn.textContent = 'Stop';
+        layer._webcamConnectBtn.classList.add('active');
+      } else {
+        layer._webcamConnectBtn.textContent = status === 'connecting' ? '…' : 'Connect';
+        layer._webcamConnectBtn.classList.remove('active');
+        layer._webcamConnectBtn.disabled = status === 'connecting';
+      }
+    }
+  }
+
+  // Enumerate available video input devices
+  async _getWebcamDevices() {
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      return devices.filter(d => d.kind === 'videoinput');
+    } catch (_) {
+      return [];
+    }
+  }
+
   _renderLayer(layer, lCanvas, time, audioLevel) {
     const lCtx = lCanvas.getContext('2d');
     const bw = lCanvas.width, bh = lCanvas.height;
@@ -1942,6 +2098,7 @@ export class LiquidShowVisualizer {
       case 'lissajous': this._renderLissajous(layer, lCtx, bw, bh, time, audioLevel); break;
       case 'stars': this._renderStars(layer, lCtx, bw, bh, time, audioLevel); break;
       case 'lightning': this._renderLightning(layer, lCtx, bw, bh, time, audioLevel); break;
+      case 'webcam': this._renderWebcam(layer, lCtx, bw, bh, time, audioLevel); break;
     }
 
     // Apply per-layer post effects
@@ -3550,6 +3707,9 @@ export class LiquidShowVisualizer {
         // Layer indices shift down by 1 after splice
         this._maskEditingLayerIndex--;
       }
+      // Stop webcam stream before removing the layer
+      const deletingLayer = this.layers[this.selectedLayerIndex];
+      if (deletingLayer?.type === 'webcam') this._stopWebcam(deletingLayer);
       this.layers.splice(this.selectedLayerIndex, 1);
       if (this.selectedLayerIndex >= this.layers.length) this.selectedLayerIndex = this.layers.length - 1;
       if (this.soloLayerIndex >= this.layers.length) this.soloLayerIndex = -1;
@@ -3613,6 +3773,22 @@ export class LiquidShowVisualizer {
       this._pushHistory();
     }
 
+    // Auto-reconnect any webcam layers if camera permission was previously granted
+    (async () => {
+      try {
+        const perm = await navigator.permissions?.query({ name: 'camera' });
+        if (perm?.state === 'granted') {
+          this.layers.forEach(l => {
+            if (l.type === 'webcam' && !l._webcamStream) {
+              const savedDevice = l._webcamDeviceId
+                || (() => { try { return localStorage.getItem('ll-webcam-deviceId'); } catch(_) { return null; } })();
+              this._startWebcam(l, savedDevice);
+            }
+          });
+        }
+      } catch (_) { /* permissions API not supported */ }
+    })();
+
     // Canvas click → toggle all UI chrome (desktop "clean canvas" mode)
     this._llUiHidden = false; // always start visible when panel is built
     if (this._canvasUIClickHandler) {
@@ -3636,6 +3812,8 @@ export class LiquidShowVisualizer {
   }
 
   destroyPanel() {
+    // Stop all active webcam streams
+    this._stopAllWebcamLayers();
     // Clean up mask editor if active
     if (this._maskEditingLayerIndex >= 0) {
       this._exitMaskEditMode();
@@ -3698,6 +3876,7 @@ export class LiquidShowVisualizer {
         imgPanMode:    l.type === 'image' ? (l._imgPanMode    ?? 'off') : undefined,
         imgPanSpeed:   l.type === 'image' ? (l._imgPanSpeed   ?? 0.3)   : undefined,
         imgMotionBlur: l.type === 'image' ? (l._imgMotionBlur ?? 0)     : undefined,
+        webcamDeviceId: l.type === 'webcam' ? (l._webcamDeviceId ?? null) : undefined,
         lissajousShape: l.type === 'lissajous' ? (l._lissajousShape || 2) : undefined,
         pulseMode: l.type === 'pulse' ? (l._pulseMode || 'constant') : undefined,
         starsRotSpeed: l.type === 'stars' ? (l._starsRotSpeed ?? 0) : undefined,
@@ -3783,6 +3962,9 @@ export class LiquidShowVisualizer {
         if (saved.imgPanMode    !== undefined) layer._imgPanMode    = saved.imgPanMode;
         if (saved.imgPanSpeed   !== undefined) layer._imgPanSpeed   = saved.imgPanSpeed;
         if (saved.imgMotionBlur !== undefined) layer._imgMotionBlur = saved.imgMotionBlur;
+      }
+      if (saved.type === 'webcam') {
+        layer._webcamDeviceId = saved.webcamDeviceId ?? null;
       }
       if (saved.type === 'lissajous' && saved.lissajousShape !== undefined) {
         layer._lissajousShape = saved.lissajousShape;
@@ -3919,6 +4101,8 @@ export class LiquidShowVisualizer {
       typeSelect.addEventListener('change', (e) => {
         e.stopPropagation();
         if (this._isLayerLocked(i)) { typeSelect.value = layer.type; return; }
+        // Stop webcam stream if switching away from webcam
+        if (layer.type === 'webcam') this._stopWebcam(layer);
         layer.type = typeSelect.value;
         layer._imgCanvas = null;
         layer._imgPixels = null;
@@ -4396,6 +4580,90 @@ export class LiquidShowVisualizer {
       blurRow.appendChild(blurSlider);
       blurRow.appendChild(blurVal);
       container.appendChild(blurRow);
+    }
+
+    // Webcam controls (only for webcam layers, single-select only)
+    if (layer.type === 'webcam' && !isMulti) {
+      const wcLabelCss = 'font-size:10px;font-weight:bold;color:#0af;white-space:nowrap;';
+
+      // Status row
+      const statusRow = document.createElement('div');
+      statusRow.className = 'll-webcam-row';
+      const statusLabel = document.createElement('span');
+      statusLabel.style.cssText = wcLabelCss + 'margin-right:4px;';
+      statusLabel.textContent = 'Webcam:';
+      const statusEl = document.createElement('span');
+      statusEl.className = 'll-webcam-status';
+      const status = layer._webcamStatus || 'idle';
+      const statusLabels = { idle: '—', connecting: '⏳ Connecting…', active: '🟢 Live', denied: '🔴 Permission denied', error: '🔴 Error' };
+      statusEl.textContent = statusLabels[status] ?? status;
+      layer._webcamStatusEl = statusEl;
+      statusRow.appendChild(statusLabel);
+      statusRow.appendChild(statusEl);
+      container.appendChild(statusRow);
+
+      // Device picker row
+      const deviceRow = document.createElement('div');
+      deviceRow.className = 'll-webcam-row';
+      const deviceLabel = document.createElement('span');
+      deviceLabel.style.cssText = wcLabelCss + 'margin-right:4px;';
+      deviceLabel.textContent = 'Camera:';
+      const deviceSelect = document.createElement('select');
+      deviceSelect.className = 'll-webcam-select';
+      // Populate devices async
+      const defaultOpt = document.createElement('option');
+      defaultOpt.value = '';
+      defaultOpt.textContent = 'Default';
+      deviceSelect.appendChild(defaultOpt);
+      layer._webcamDeviceSelect = deviceSelect;
+      this._getWebcamDevices().then(devices => {
+        devices.forEach(d => {
+          const opt = document.createElement('option');
+          opt.value = d.deviceId;
+          opt.textContent = d.label || `Camera ${deviceSelect.options.length}`;
+          if (d.deviceId === layer._webcamDeviceId) opt.selected = true;
+          deviceSelect.appendChild(opt);
+        });
+        // If no labels yet (before first permission grant) we only have default
+        if (devices.length === 0) {
+          const noOpt = document.createElement('option');
+          noOpt.value = '';
+          noOpt.textContent = '(grant access first)';
+          noOpt.disabled = true;
+          deviceSelect.appendChild(noOpt);
+        }
+      });
+      deviceSelect.addEventListener('change', () => {
+        layer._webcamDeviceId = deviceSelect.value || null;
+        if (layer._webcamStatus === 'active') {
+          // Restart with new device
+          this._startWebcam(layer, layer._webcamDeviceId);
+        }
+      });
+      deviceRow.appendChild(deviceLabel);
+      deviceRow.appendChild(deviceSelect);
+      container.appendChild(deviceRow);
+
+      // Connect / Stop button row
+      const connectRow = document.createElement('div');
+      connectRow.className = 'll-webcam-row';
+      const connectBtn = document.createElement('button');
+      connectBtn.className = 'll-toggle' + (status === 'active' ? ' active' : '');
+      connectBtn.textContent = status === 'active' ? 'Stop' : (status === 'connecting' ? '…' : 'Connect');
+      connectBtn.disabled = status === 'connecting';
+      connectBtn.title = status === 'active' ? 'Stop webcam feed' : 'Start webcam feed';
+      layer._webcamConnectBtn = connectBtn;
+      connectBtn.addEventListener('click', () => {
+        if (this._isLayerLocked(this.selectedLayerIndex)) return;
+        if (layer._webcamStatus === 'active') {
+          this._stopWebcam(layer);
+        } else {
+          const deviceId = layer._webcamDeviceSelect?.value || layer._webcamDeviceId || null;
+          this._startWebcam(layer, deviceId);
+        }
+      });
+      connectRow.appendChild(connectBtn);
+      container.appendChild(connectRow);
     }
 
     // Pulse mode selector (only for pulse layers, single-select only)
@@ -5464,7 +5732,8 @@ export class LiquidShowVisualizer {
   _randomizeLayerAt(layerIndex) {
     const layer = this.layers[layerIndex];
     if (!layer) return;
-    const newType = LAYER_TYPES[Math.floor(Math.random() * LAYER_TYPES.length)];
+    const RANDOMIZABLE_TYPES = LAYER_TYPES.filter(t => t !== 'webcam');
+    const newType = RANDOMIZABLE_TYPES[Math.floor(Math.random() * RANDOMIZABLE_TYPES.length)];
     layer.type = newType;
     if (newType === 'image') {
       const idx = Math.floor(Math.random() * GALLERY_IMAGES.length);
@@ -5522,8 +5791,11 @@ export class LiquidShowVisualizer {
   _randomizeAllLayersInternal() {
     this._currentPresetId = null;
     if (this._presetSelect) this._presetSelect.value = '';
+    const RANDOMIZABLE_TYPES = LAYER_TYPES.filter(t => t !== 'webcam');
     this.layers.forEach(layer => {
-      const newType = LAYER_TYPES[Math.floor(Math.random() * LAYER_TYPES.length)];
+      // Never randomize a webcam layer — it would drop the stream
+      if (layer.type === 'webcam') return;
+      const newType = RANDOMIZABLE_TYPES[Math.floor(Math.random() * RANDOMIZABLE_TYPES.length)];
       layer.type = newType;
 
       if (newType === 'image') {
@@ -5582,10 +5854,13 @@ export class LiquidShowVisualizer {
   _randomizeAllLayers() {
     this._currentPresetId = null;
     if (this._presetSelect) this._presetSelect.value = '';
+    const RANDOMIZABLE_TYPES = LAYER_TYPES.filter(t => t !== 'webcam');
     // Skip locked layers when called interactively
     this.layers.forEach(layer => {
       if (layer.locked) return;
-      const newType = LAYER_TYPES[Math.floor(Math.random() * LAYER_TYPES.length)];
+      // Never randomize a webcam layer — it would drop the stream
+      if (layer.type === 'webcam') return;
+      const newType = RANDOMIZABLE_TYPES[Math.floor(Math.random() * RANDOMIZABLE_TYPES.length)];
       layer.type = newType;
       if (newType === 'image') {
         const idx = Math.floor(Math.random() * GALLERY_IMAGES.length);
