@@ -2197,7 +2197,8 @@ html, body {
 
 .ll-webcam-status {
   font-size: 10px;
-  color: #ccc;
+  color: #000;
+  font-weight: bold;
 }
 
 .ll-webcam-select {
@@ -2226,8 +2227,7 @@ html, body {
   font-weight: bold;
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  color: #0af;
-  opacity: 0.7;
+  color: #000;
   margin-bottom: 4px;
 }
 

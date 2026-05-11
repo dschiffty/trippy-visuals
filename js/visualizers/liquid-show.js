@@ -81,7 +81,7 @@ function hslToRgb(h, s, l) {
 const LAYER_TYPES = ['wash', 'blob', 'marbling', 'bubble', 'image', 'scope', 'pulse', 'lissajous', 'stars', 'lightning', 'webcam'];
 const LAYER_TYPE_LABELS = { wash: 'Wash', blob: 'Blob', marbling: 'Marbling', bubble: 'Bubble', image: 'Image', scope: 'Scope', pulse: 'Pulse', lissajous: 'Lissajous', stars: 'Stars', lightning: 'Lightning', webcam: 'Webcam' };
 // Layer types that support the canvas-level spin rotation controls
-const SPIN_LAYER_TYPES = new Set(['wash', 'bubble', 'pulse', 'image', 'lissajous']);
+const SPIN_LAYER_TYPES = new Set(['wash', 'bubble', 'pulse', 'image', 'lissajous', 'webcam']);
 const BLEND_MODES = [
   { value: 'source-over', label: 'Normal' },
   { value: 'lighter', label: 'Add' },
@@ -2116,14 +2116,20 @@ export class LiquidShowVisualizer {
 
   // Stop webcam stream on a layer
   _stopWebcam(layer) {
+    // Detach video element first so the browser releases the camera indicator light
+    if (layer._webcamVideo) {
+      layer._webcamVideo.pause();
+      layer._webcamVideo.srcObject = null;
+    }
+    // Stop all MediaStream tracks — this turns off the camera LED
     if (layer._webcamStream) {
       layer._webcamStream.getTracks().forEach(t => t.stop());
       layer._webcamStream = null;
     }
-    layer._webcamVideo       = null;
-    layer._webcamStatus      = 'idle';
+    layer._webcamVideo        = null;
+    layer._webcamStatus       = 'idle';
     layer._webcamCapabilities = null;
-    layer._wcamHWSupport     = {};
+    layer._wcamHWSupport      = {};
     this._refreshWebcamUI(layer);
   }
 
@@ -4679,8 +4685,7 @@ export class LiquidShowVisualizer {
 
     // Webcam controls (only for webcam layers, single-select only)
     if (layer.type === 'webcam' && !isMulti) {
-      const wcLabelCss = 'font-size:10px;font-weight:bold;color:#0af;white-space:nowrap;';
-      const wcRowLabelCss = 'font-size:10px;color:#8cf;white-space:nowrap;min-width:72px;';
+      const wcLabelCss = 'font-size:10px;font-weight:bold;color:#000;white-space:nowrap;';
 
       // Status row
       const statusRow = document.createElement('div');
@@ -4767,11 +4772,15 @@ export class LiquidShowVisualizer {
       camHeader.textContent = 'Camera Settings';
       camSection.appendChild(camHeader);
 
+      // Shared label style — dark text, legible on light panel background
+      const camLblCss = 'font-size:9px;font-weight:bold;color:#000;white-space:nowrap;min-width:68px;';
+      const camValCss = 'font-size:10px;color:#333;min-width:36px;text-align:right;flex-shrink:0;';
+
       // --- Flip toggle ---
       const flipRow = document.createElement('div');
       flipRow.className = 'll-webcam-row';
       const flipLbl = document.createElement('span');
-      flipLbl.style.cssText = wcRowLabelCss;
+      flipLbl.style.cssText = camLblCss;
       flipLbl.textContent = 'Flip:';
       const flipBtn = document.createElement('button');
       const curFlip = layer._wcamFlip ?? true;
@@ -4788,46 +4797,46 @@ export class LiquidShowVisualizer {
       flipRow.appendChild(flipBtn);
       camSection.appendChild(flipRow);
 
-      // --- Frame Rate ---
+      // --- Frame Rate slider (1–60 fps; null stored as 0 = Auto) ---
       const fpsRow = document.createElement('div');
       fpsRow.className = 'll-webcam-row';
-      fpsRow.style.flexWrap = 'wrap';
+      fpsRow.style.gap = '4px';
       const fpsLbl = document.createElement('span');
-      fpsLbl.style.cssText = wcRowLabelCss;
+      fpsLbl.style.cssText = camLblCss;
       fpsLbl.textContent = 'Frame Rate:';
-      fpsRow.appendChild(fpsLbl);
-      const fpsBtnWrap = document.createElement('div');
-      fpsBtnWrap.style.cssText = 'display:flex;gap:3px;flex-wrap:wrap;';
-      const fpsOptions = [null, 60, 30, 24, 15, 8];
-      fpsOptions.forEach(fps => {
-        const btn = document.createElement('button');
-        btn.className = 'll-toggle' + ((layer._wcamFrameRate ?? null) === fps ? ' active' : '');
-        btn.textContent = fps === null ? 'Auto' : `${fps}`;
-        btn.style.cssText = 'padding:2px 5px;font-size:9px;';
-        btn.title = fps === null ? 'Default frame rate' : `${fps} fps`;
-        btn.addEventListener('click', () => {
-          if (this._isLayerLocked(this.selectedLayerIndex)) return;
-          layer._wcamFrameRate = fps;
-          fpsBtnWrap.querySelectorAll('.ll-toggle').forEach((b, bi) => {
-            b.classList.toggle('active', fpsOptions[bi] === fps);
-          });
-          // Restart stream to apply new frame rate if active
-          if (layer._webcamStatus === 'active') {
-            this._startWebcam(layer, layer._webcamDeviceId);
-          }
-        });
-        fpsBtnWrap.appendChild(btn);
+      const fpsSlider = document.createElement('input');
+      fpsSlider.type = 'range';
+      fpsSlider.className = 'll-row-slider';
+      fpsSlider.min = '0'; fpsSlider.max = '60'; fpsSlider.step = '1';
+      fpsSlider.value = String(layer._wcamFrameRate ?? 0);
+      const fpsValEl = document.createElement('span');
+      fpsValEl.style.cssText = camValCss;
+      fpsValEl.textContent = (layer._wcamFrameRate ?? 0) === 0 ? 'Auto' : `${layer._wcamFrameRate}fps`;
+      fpsSlider.addEventListener('change', () => {    // 'change' avoids restarting on every tick
+        if (this._isLayerLocked(this.selectedLayerIndex)) return;
+        const val = parseInt(fpsSlider.value, 10);
+        layer._wcamFrameRate = val === 0 ? null : val;
+        fpsValEl.textContent = val === 0 ? 'Auto' : `${val}fps`;
+        if (layer._webcamStatus === 'active') {
+          this._startWebcam(layer, layer._webcamDeviceId);
+        }
       });
-      fpsRow.appendChild(fpsBtnWrap);
+      fpsSlider.addEventListener('input', () => {
+        const val = parseInt(fpsSlider.value, 10);
+        fpsValEl.textContent = val === 0 ? 'Auto' : `${val}fps`;
+      });
+      fpsRow.appendChild(fpsLbl);
+      fpsRow.appendChild(fpsSlider);
+      fpsRow.appendChild(fpsValEl);
       camSection.appendChild(fpsRow);
 
       // --- Slider helper ---
-      const makeWcamSlider = (labelText, prop, min, max, step, defaultVal, fmtFn) => {
+      const makeWcamSlider = (labelText, prop, min, max, step, defaultVal, fmtFn, onInputExtra) => {
         const row = document.createElement('div');
         row.className = 'll-webcam-row';
         row.style.gap = '4px';
         const lbl = document.createElement('span');
-        lbl.style.cssText = wcRowLabelCss;
+        lbl.style.cssText = camLblCss;
         lbl.textContent = labelText + ':';
         const slider = document.createElement('input');
         slider.type = 'range';
@@ -4837,7 +4846,7 @@ export class LiquidShowVisualizer {
         slider.step = String(step);
         slider.value = String(layer[prop] ?? defaultVal);
         const valEl = document.createElement('span');
-        valEl.style.cssText = 'font-size:10px;color:#aaa;min-width:36px;text-align:right;flex-shrink:0;';
+        valEl.style.cssText = camValCss;
         valEl.textContent = fmtFn(parseFloat(slider.value));
         slider.addEventListener('input', () => {
           if (this._isLayerLocked(this.selectedLayerIndex)) return;
@@ -4845,6 +4854,7 @@ export class LiquidShowVisualizer {
           layer[prop] = val;
           valEl.textContent = fmtFn(val);
           this._applyWebcamHardwareConstraints(layer);
+          if (onInputExtra) onInputExtra(val);
         });
         row.appendChild(lbl);
         row.appendChild(slider);
