@@ -2152,13 +2152,15 @@ export class LiquidShowVisualizer {
     const labels = { idle: '—', connecting: '⏳ Connecting…', active: '🟢 Live', denied: '🔴 Permission denied', error: '🔴 Error' };
     layer._webcamStatusEl.textContent = labels[status] ?? status;
     if (layer._webcamConnectBtn) {
+      const btn = layer._webcamConnectBtn;
       if (status === 'active') {
-        layer._webcamConnectBtn.textContent = 'Stop';
-        layer._webcamConnectBtn.classList.add('active');
+        btn.textContent = 'Stop';
+        btn.classList.add('active');
+        btn.disabled = false;
       } else {
-        layer._webcamConnectBtn.textContent = status === 'connecting' ? '…' : 'Connect';
-        layer._webcamConnectBtn.classList.remove('active');
-        layer._webcamConnectBtn.disabled = status === 'connecting';
+        btn.textContent = status === 'connecting' ? '…' : 'Connect';
+        btn.classList.remove('active');
+        btn.disabled = status === 'connecting';
       }
     }
   }
