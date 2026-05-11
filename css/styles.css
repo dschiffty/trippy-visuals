@@ -991,6 +991,15 @@ html, body {
   background: rgba(46, 204, 64, 0.7);
   box-shadow: 0 0 10px rgba(46, 204, 64, 0.5);
 }
+/* Nav buttons (Back / Forward) — smaller font for arrow text */
+.cam-fbtn.cam-nav-btn {
+  font-size: 22px;
+}
+.cam-fbtn:disabled {
+  opacity: 0.28;
+  cursor: default;
+  pointer-events: none;
+}
 
 /* Effects toggle button */
 .cam-effects-toggle {

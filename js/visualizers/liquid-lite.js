@@ -16,7 +16,7 @@ export class LiquidLiteVisualizer {
   constructor(canvas) {
     this.canvas = canvas;
     this.engine = new LiquidShowVisualizer(canvas);
-    // Load London Tube as the default preset on start
+    // Load Rainbow RPM as the default preset on start
     const londonTube = LL_PRESETS.find(p => p.id === 'rainbow-rpm');
     const defaultPreset = londonTube || LL_PRESETS[0];
     if (defaultPreset) {
@@ -27,6 +27,7 @@ export class LiquidLiteVisualizer {
     this._micBtn = null;
     this._micLevelRAF = null;
     this._globalIntensity = 1.0;
+    this._liteSpeed = 1.0;
     this._floatingEls = [];
     this._leftStack = null;
     this._rightStack = null;
@@ -34,9 +35,25 @@ export class LiquidLiteVisualizer {
     this._orientationHandler = null;
     this._orientationDebounce = null;
     this._gainSlider = null;
+    this._speedSlider = null;
+    this._backBtn = null;
+    this._fwdBtn = null;
+
+    // History stack for Back/Forward (stores last 10 states)
+    this._liteHistory = [{
+      state: JSON.stringify(this.engine.getState()),
+      presetId: this._currentPresetId,
+    }];
+    this._liteHistoryIdx = 0;
   }
 
   draw(freq, time) {
+    // Temporarily apply master speed multiplier to global speed
+    const savedGlobalSpeed = this.engine.globals.speed;
+    if (this._liteSpeed !== 1.0) {
+      this.engine.globals.speed = savedGlobalSpeed * this._liteSpeed;
+    }
+
     // Apply global intensity multiplier to all layer turbulence values
     if (this._globalIntensity !== 1.0) {
       const saved = this.engine.layers.map(l => l.params.turbulence);
@@ -48,12 +65,96 @@ export class LiquidLiteVisualizer {
     } else {
       this.engine.draw(freq, time);
     }
+
+    // Restore global speed
+    if (this._liteSpeed !== 1.0) {
+      this.engine.globals.speed = savedGlobalSpeed;
+    }
   }
 
   reset() { this.engine.reset(); }
   getState() { return this.engine.getState(); }
   setState(s) { this.engine.setState(s); }
   setParam(k, v) { this.engine.setParam?.(k, v); }
+
+  // --- History ---
+
+  _pushLiteHistory() {
+    // Truncate any forward states
+    this._liteHistory = this._liteHistory.slice(0, this._liteHistoryIdx + 1);
+    this._liteHistory.push({
+      state: JSON.stringify(this.engine.getState()),
+      presetId: this._currentPresetId,
+    });
+    // Keep max 10
+    if (this._liteHistory.length > 10) this._liteHistory.shift();
+    this._liteHistoryIdx = this._liteHistory.length - 1;
+    this._updateNavBtns();
+  }
+
+  _updateNavBtns() {
+    if (this._backBtn) this._backBtn.disabled = this._liteHistoryIdx <= 0;
+    if (this._fwdBtn)  this._fwdBtn.disabled  = this._liteHistoryIdx >= this._liteHistory.length - 1;
+  }
+
+  _liteBack() {
+    if (this._liteHistoryIdx <= 0) return;
+    this._liteHistoryIdx--;
+    this._restoreFromHistory();
+  }
+
+  _liteFwd() {
+    if (this._liteHistoryIdx >= this._liteHistory.length - 1) return;
+    this._liteHistoryIdx++;
+    this._restoreFromHistory();
+  }
+
+  _restoreFromHistory() {
+    const entry = this._liteHistory[this._liteHistoryIdx];
+    if (!entry) return;
+    this.engine.setState(JSON.parse(entry.state));
+    this._currentPresetId = entry.presetId;
+    if (this._presetSelect) this._presetSelect.value = entry.presetId || '';
+    this._updateNavBtns();
+  }
+
+  // --- Download / Share ---
+
+  async _downloadJSON() {
+    const vizState = this.engine.getState();
+    const data = {
+      name: `Liquid Lite — ${new Date().toLocaleString()}`,
+      date: new Date().toISOString(),
+      state: { preset: 'liquidShow', vizState },
+      version: 1,
+    };
+    const json = JSON.stringify(data, null, 2);
+    const filename = `visualizer-liquid-lite-${Date.now()}.json`;
+    const blob = new Blob([json], { type: 'application/json' });
+
+    // iOS: use native share sheet (lets user save to Files, Messages, etc.)
+    if (navigator.canShare) {
+      const file = new File([blob], filename, { type: 'application/json' });
+      if (navigator.canShare({ files: [file] })) {
+        try {
+          await navigator.share({ files: [file], title: filename });
+          return;
+        } catch (e) {
+          if (e.name === 'AbortError') return; // user cancelled — no fallback needed
+        }
+      }
+    }
+
+    // Fallback: standard download link
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
 
   // --- Panel UI (Camera mode inspired) ---
 
@@ -120,6 +221,20 @@ export class LiquidLiteVisualizer {
     this._intensitySlider = intensitySliderComp;
     rightStack.appendChild(intensitySliderComp.wrap);
 
+    // Master speed slider (0.1× slow → 2× fast)
+    const speedSliderComp = createVerticalSlider({
+      icon: '⚡',
+      min: 0.1,
+      max: 2,
+      step: 0.05,
+      value: this._liteSpeed,
+      onChange: (val) => {
+        this._liteSpeed = val;
+      },
+    });
+    this._speedSlider = speedSliderComp;
+    rightStack.appendChild(speedSliderComp.wrap);
+
     this._rightStack = rightStack;
     panel.appendChild(rightStack);
 
@@ -130,30 +245,50 @@ export class LiquidLiteVisualizer {
     // Preset dropdown
     const presetSelector = LiquidShowVisualizer.buildPresetSelector(state => {
       this.engine.setState(state);
+      this._pushLiteHistory();
     });
     this._presetSelect = presetSelector.querySelector('select');
-    if (this._presetSelect && this._currentPresetId) this._presetSelect.value = this._currentPresetId;
+    if (this._presetSelect) {
+      if (this._currentPresetId) this._presetSelect.value = this._currentPresetId;
+      // Track current preset ID for history
+      this._presetSelect.addEventListener('change', () => {
+        this._currentPresetId = this._presetSelect.value || null;
+      });
+    }
     presetSelector.className = 'cam-preset-wrap';
     bottomBar.appendChild(presetSelector);
 
-    // Randomize button (dice icon, matching cam-fbtn style)
+    // Randomize button
     const randomBtn = this._makeFloatBtn('🎲', 'Randomize');
     randomBtn.addEventListener('click', () => {
       this.engine._randomizeAllLayersInternal();
+      this._currentPresetId = null;
       if (this._presetSelect) this._presetSelect.value = '';
+      this._pushLiteHistory();
     });
     bottomBar.appendChild(randomBtn);
 
-    // New blank canvas button
-    const blankBtn = this._makeFloatBtn('⊘', 'New Canvas');
-    blankBtn.addEventListener('click', () => {
-      if (confirm('Clear everything and start fresh?')) {
-        this.engine._resetToBlank();
-        this._currentPresetId = null;
-        if (this._presetSelect) this._presetSelect.value = '';
-      }
-    });
-    bottomBar.appendChild(blankBtn);
+    // Back button
+    const backBtn = this._makeFloatBtn('←', 'Back');
+    backBtn.classList.add('cam-nav-btn');
+    this._backBtn = backBtn;
+    backBtn.addEventListener('click', () => this._liteBack());
+    bottomBar.appendChild(backBtn);
+
+    // Forward button
+    const fwdBtn = this._makeFloatBtn('→', 'Forward');
+    fwdBtn.classList.add('cam-nav-btn');
+    this._fwdBtn = fwdBtn;
+    fwdBtn.addEventListener('click', () => this._liteFwd());
+    bottomBar.appendChild(fwdBtn);
+
+    // Download / share button
+    const dlBtn = this._makeFloatBtn('⬇', 'Download');
+    dlBtn.addEventListener('click', () => this._downloadJSON());
+    bottomBar.appendChild(dlBtn);
+
+    // Sync button enabled states
+    this._updateNavBtns();
 
     this._bottomBar = bottomBar;
     panel.appendChild(bottomBar);
@@ -268,6 +403,9 @@ export class LiquidLiteVisualizer {
     this._presetSelect = null;
     this._gainSlider = null;
     this._intensitySlider = null;
+    this._speedSlider = null;
+    this._backBtn = null;
+    this._fwdBtn = null;
     this._controlPanelEl?.classList.remove('ll-active', 'll-ui-hidden');
   }
 
