@@ -2085,6 +2085,21 @@ html, body {
   color: #811 !important;
 }
 
+/* Snapshot button */
+.ll-snapshot-btn {
+  background: #e8f0fc !important;
+  border-top-color:  #a0b8d8 !important;
+  border-left-color: #a0b8d8 !important;
+  color: #1a3a5c !important;
+}
+.ll-snapshot-btn:hover {
+  background: #d4e4f8 !important;
+}
+.ll-snapshot-btn:disabled {
+  opacity: 0.65;
+  cursor: default;
+}
+
 .ll-image-row {
   display: flex;
   align-items: center;

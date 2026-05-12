@@ -38,6 +38,7 @@ export class LiquidLiteVisualizer {
     this._speedSlider = null;
     this._backBtn = null;
     this._fwdBtn = null;
+    this._snapBtn = null;
 
     // History stack for Back/Forward (stores last 10 states)
     this._liteHistory = [{
@@ -287,6 +288,25 @@ export class LiquidLiteVisualizer {
     dlBtn.addEventListener('click', () => this._downloadJSON());
     bottomBar.appendChild(dlBtn);
 
+    // Snapshot button — captures full-resolution PNG via native share sheet (iOS) or download
+    const snapBtn = this._makeFloatBtn('📷', 'Snapshot');
+    this._snapBtn = snapBtn;
+    snapBtn.addEventListener('click', async () => {
+      if (!this._app) return;
+      snapBtn.innerHTML = '⏳';
+      snapBtn.disabled = true;
+      try {
+        const label = this._currentPresetId
+          ? (LL_PRESETS.find(p => p.id === this._currentPresetId)?.name ?? 'liquid-lite')
+          : 'liquid-lite';
+        await this._app.takeSnapshot(label.replace(/\s+/g, '-').toLowerCase());
+      } finally {
+        snapBtn.innerHTML = '📷';
+        snapBtn.disabled = false;
+      }
+    });
+    bottomBar.appendChild(snapBtn);
+
     // Sync button enabled states
     this._updateNavBtns();
 
@@ -406,6 +426,7 @@ export class LiquidLiteVisualizer {
     this._speedSlider = null;
     this._backBtn = null;
     this._fwdBtn = null;
+    this._snapBtn = null;
     this._controlPanelEl?.classList.remove('ll-active', 'll-ui-hidden');
   }
 

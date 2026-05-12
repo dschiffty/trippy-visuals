@@ -56,6 +56,7 @@ class App {
     this._qualityFpsHistory = [];    // rolling FPS samples for adaptive decisions
     this._qualityLowSince = 0;      // timestamp when FPS first dropped below threshold
     this._qualityHighSince = 0;     // timestamp when FPS first exceeded high threshold
+    this._snapshotInProgress = false; // true while a hi-res snapshot is being captured
 
     // Shared mic input state (persists across mode switches)
     this.mic = {
@@ -1301,6 +1302,7 @@ class App {
   /* ---- Adaptive Quality ---- */
 
   _adaptiveQualityUpdate(fps, timestamp) {
+    if (this._snapshotInProgress) return; // don't scale quality during capture
     const LOW_THRESHOLD = 30;
     const HIGH_THRESHOLD = 45;
     const LOW_DURATION = 4000;   // ms below threshold before stepping down
@@ -1359,6 +1361,7 @@ class App {
   /* ---- Canvas ---- */
 
   resizeCanvas() {
+    if (this._snapshotInProgress) return; // freeze canvas dimensions during hi-res capture
     const container = this.canvas.parentElement;
     const rect = container.getBoundingClientRect();
     const cssW = rect.width;
@@ -2059,6 +2062,89 @@ class App {
       this._fsRestoreChangeFn = null;
     }
     this._fsRestoreClickFn = null;
+  }
+
+  /* ---- Hi-Res Snapshot ---- */
+
+  /**
+   * Temporarily renders at full native DPR resolution, captures a PNG, and
+   * either triggers a browser download (desktop) or native share sheet (mobile/iOS).
+   * @param {string} label  Base filename (timestamps appended automatically)
+   */
+  async takeSnapshot(label = 'snapshot') {
+    if (this._snapshotInProgress) return;
+    this._snapshotInProgress = true;
+    try {
+      // Save current canvas dimensions
+      const savedW = this.canvas.width;
+      const savedH = this.canvas.height;
+
+      // Resize canvas to full native DPR resolution (bypasses _qualityScale)
+      const dpr = window.devicePixelRatio || 1;
+      const container = this.canvas.parentElement;
+      const rect = container.getBoundingClientRect();
+      this.canvas.width  = Math.round(rect.width  * dpr);
+      this.canvas.height = Math.round(rect.height * dpr);
+
+      // Render one high-res frame with the current audio data
+      let freq, time;
+      if (this.mic.active && this.mic.analyser) {
+        this.mic.analyser.getByteFrequencyData(this.mic.freqData);
+        this.mic.analyser.getByteTimeDomainData(this.mic.timeData);
+        freq = this.mic.freqData;
+        time = this.mic.timeData;
+      } else if (this.audio.isCapturing) {
+        freq = this.audio.getFrequencyData();
+        time = this.audio.getTimeDomainData();
+      } else {
+        const synth = this._generateSyntheticAudio(performance.now());
+        freq = synth.frequency;
+        time = synth.timeDomain;
+      }
+      this.activeVisualizer.draw(freq, time);
+
+      // Capture PNG — _snapshotInProgress holds resizeCanvas calls at bay during the await
+      const blob = await new Promise(resolve => this.canvas.toBlob(resolve, 'image/png'));
+
+      // Restore canvas to its previous render dimensions
+      this.canvas.width  = savedW;
+      this.canvas.height = savedH;
+
+      if (!blob) return null;
+
+      const ts = new Date().toISOString().slice(0, 19).replace(/[T:]/g, '-');
+      const filename = `${label}-${ts}.png`;
+
+      // Mobile/iOS: native share sheet so the user can save to camera roll
+      if (navigator.canShare) {
+        const file = new File([blob], filename, { type: 'image/png' });
+        if (navigator.canShare({ files: [file] })) {
+          try {
+            await navigator.share({ files: [file], title: filename });
+            return filename;
+          } catch (e) {
+            if (e.name === 'AbortError') return filename; // user cancelled — no fallback
+          }
+        }
+      }
+
+      // Desktop: trigger a PNG download
+      this._downloadBlob(blob, filename);
+      return filename;
+    } finally {
+      this._snapshotInProgress = false;
+    }
+  }
+
+  _downloadBlob(blob, filename) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   }
 }
 

@@ -5700,6 +5700,31 @@ export class LiquidShowVisualizer {
     toolbar.appendChild(dynamicBtn);
     toolbar.appendChild(lockAllBtn);
     toolbar.appendChild(resetBtn);
+
+    // Snapshot button — only shown in main window (not in the detached popout)
+    if (this._app && !this._app.isPopout) {
+      const snapshotBtn = document.createElement('button');
+      snapshotBtn.className = 'param-tool-btn ll-snapshot-btn';
+      snapshotBtn.innerHTML = '<i class="ti ti-camera"></i> Snapshot';
+      snapshotBtn.title = 'Save full-resolution PNG (at native display DPR)';
+      snapshotBtn.addEventListener('click', async () => {
+        if (!this._app) return;
+        const origHTML = snapshotBtn.innerHTML;
+        snapshotBtn.textContent = 'Capturing…';
+        snapshotBtn.disabled = true;
+        try {
+          const presetName = this._currentPresetId
+            ? (LL_PRESETS.find(p => p.id === this._currentPresetId)?.name ?? 'liquid-lights')
+            : 'liquid-lights';
+          await this._app.takeSnapshot(presetName.replace(/\s+/g, '-').toLowerCase());
+        } finally {
+          snapshotBtn.innerHTML = origHTML;
+          snapshotBtn.disabled = false;
+        }
+      });
+      toolbar.appendChild(snapshotBtn);
+    }
+
     container.appendChild(toolbar);
   }
 
