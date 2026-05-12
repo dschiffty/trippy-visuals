@@ -79,7 +79,7 @@ function hslToRgb(h, s, l) {
 
 // --- Layer Type Constants ---
 const LAYER_TYPES = ['wash', 'blob', 'marbling', 'bubble', 'image', 'scope', 'pulse', 'lissajous', 'stars', 'lightning', 'webcam'];
-const LAYER_TYPE_LABELS = { wash: 'Wash', blob: 'Blob', marbling: 'Marbling', bubble: 'Bubble', image: 'Image', scope: 'Scope', pulse: 'Pulse', lissajous: 'Lissajous', stars: 'Stars', lightning: 'Lightning', webcam: 'Webcam' };
+const LAYER_TYPE_LABELS = { wash: 'Wash', blob: 'Blob', marbling: 'Marbling', bubble: 'Bubble', image: 'Image', scope: 'Scope', pulse: 'Pulse', lissajous: 'Lissajous', stars: 'Stars', lightning: 'Lightning', webcam: 'Webcam', blank: 'Blank' };
 // Layer types that support the canvas-level spin rotation controls
 const SPIN_LAYER_TYPES = new Set(['wash', 'bubble', 'pulse', 'image', 'lissajous', 'webcam']);
 const BLEND_MODES = [
@@ -3776,22 +3776,66 @@ export class LiquidShowVisualizer {
     const layerButtons = document.createElement('div');
     layerButtons.className = 'll-layer-buttons';
 
-    const addBtn = this._makeBtn('+', 'Add Layer');
-    const dupBtn = this._makeBtn('\u29C9', 'Duplicate');
-    const delBtn = this._makeBtn('\u2715', 'Delete');
-    const upBtn = this._makeBtn('\u25B2', 'Move Up');
-    const downBtn = this._makeBtn('\u25BC', 'Move Down');
+    // --- Add split button: [+] adds a wash layer, [\u25BE] shows Add / Blank menu ---
+    const addSplit = document.createElement('div');
+    addSplit.className = 'll-add-split';
 
-    addBtn.addEventListener('click', () => {
+    const addMainBtn = this._makeBtn('+', 'Add Wash Layer');
+    addMainBtn.classList.add('ll-add-main');
+
+    const addArrowBtn = this._makeBtn('\u25BE', 'More add options');
+    addArrowBtn.classList.add('ll-add-arrow');
+
+    const _doAddLayer = (type) => {
       if (this._globalLock) return;
       if (this.layers.length >= 6) return;
-      this.layers.push(this._createLayer('wash'));
+      this.layers.push(this._createLayer(type));
       this.selectedLayerIndex = this.layers.length - 1;
       this.selectedLayerIndices = new Set([this.selectedLayerIndex]);
       this._rebuildLayerList();
       this._rebuildLayerKnobs();
       this._pushHistory();
+    };
+    addMainBtn.addEventListener('click', () => _doAddLayer('wash'));
+
+    const addMenu = document.createElement('div');
+    addMenu.className = 'll-add-menu';
+    addMenu.style.display = 'none';
+
+    const makeMenuItem = (label, fn) => {
+      const item = document.createElement('button');
+      item.className = 'll-add-menu-item';
+      item.textContent = label;
+      item.addEventListener('mousedown', (e) => {
+        e.preventDefault(); // prevent blur before click registers
+        addMenu.style.display = 'none';
+        fn();
+      });
+      return item;
+    };
+    addMenu.appendChild(makeMenuItem('Add Wash Layer', () => _doAddLayer('wash')));
+    addMenu.appendChild(makeMenuItem('Add Blank Layer', () => _doAddLayer('blank')));
+
+    addArrowBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      addMenu.style.display = addMenu.style.display === 'none' ? 'block' : 'none';
     });
+
+    // Close the menu when clicking outside the split button
+    const _closeAddMenu = (e) => {
+      if (!addSplit.contains(e.target)) addMenu.style.display = 'none';
+    };
+    document.addEventListener('click', _closeAddMenu);
+    this._cleanupAddMenu = () => document.removeEventListener('click', _closeAddMenu);
+
+    addSplit.appendChild(addMainBtn);
+    addSplit.appendChild(addArrowBtn);
+    addSplit.appendChild(addMenu);
+
+    const dupBtn = this._makeBtn('\u29C9', 'Duplicate');
+    const delBtn = this._makeBtn('\u2715', 'Delete');
+    const upBtn = this._makeBtn('\u25B2', 'Move Up');
+    const downBtn = this._makeBtn('\u25BC', 'Move Down');
     dupBtn.addEventListener('click', () => {
       if (this._globalLock) return;
       if (this.layers.length >= 6) return;
@@ -3847,7 +3891,7 @@ export class LiquidShowVisualizer {
       this._pushHistory();
     });
 
-    [addBtn, dupBtn, delBtn, upBtn, downBtn].forEach(b => layerButtons.appendChild(b));
+    [addSplit, dupBtn, delBtn, upBtn, downBtn].forEach(b => layerButtons.appendChild(b));
     layersDiv.appendChild(layerList);
     layersDiv.appendChild(layerButtons);
 
@@ -3948,6 +3992,9 @@ export class LiquidShowVisualizer {
     this._panelKnobs = [];
     this._globalKnobs = [];
     this._bwKnobs = [];
+    // Clean up the add-menu document click listener
+    this._cleanupAddMenu?.();
+    this._cleanupAddMenu = null;
     // Clear the app's render callback so it doesn't write into detached DOM nodes
     if (this._app) this._app._llAudioStatusUpdate = null;
     this._app = null;
@@ -4215,6 +4262,15 @@ export class LiquidShowVisualizer {
       // Type selector
       const typeSelect = document.createElement('select');
       typeSelect.className = 'll-type-select';
+      // Blank layer: show a disabled placeholder so the row signals "unset"
+      if (layer.type === 'blank') {
+        const blankOpt = document.createElement('option');
+        blankOpt.value = 'blank';
+        blankOpt.textContent = '— type —';
+        blankOpt.selected = true;
+        blankOpt.disabled = true;
+        typeSelect.appendChild(blankOpt);
+      }
       LAYER_TYPES.forEach(t => {
         const opt = document.createElement('option');
         opt.value = t;
@@ -4320,6 +4376,52 @@ export class LiquidShowVisualizer {
     const selectedLayers = [...this.selectedLayerIndices].map(i => this.layers[i]).filter(Boolean);
     const isLocked = this._isLayerLocked(this.selectedLayerIndex);
     const anyLocked = selectedLayers.some((_, idx) => this._isLayerLocked([...this.selectedLayerIndices][idx]));
+
+    // Blank layer: show a type-selection prompt instead of knobs
+    if (layer.type === 'blank' && !isMulti) {
+      const header = document.createElement('div');
+      header.className = 'll-section-header';
+      header.textContent = `Layer ${this.selectedLayerIndex + 1} — Blank`;
+      container.appendChild(header);
+
+      const prompt = document.createElement('div');
+      prompt.className = 'll-blank-prompt';
+
+      const msg = document.createElement('div');
+      msg.className = 'll-blank-prompt-msg';
+      msg.textContent = 'Select a layer type to get started';
+
+      const sel = document.createElement('select');
+      sel.className = 'll-select ll-blank-type-select';
+
+      const defOpt = document.createElement('option');
+      defOpt.value = '';
+      defOpt.textContent = '— Choose type —';
+      defOpt.disabled = true;
+      defOpt.selected = true;
+      sel.appendChild(defOpt);
+
+      LAYER_TYPES.forEach(t => {
+        const opt = document.createElement('option');
+        opt.value = t;
+        opt.textContent = LAYER_TYPE_LABELS[t];
+        sel.appendChild(opt);
+      });
+
+      sel.addEventListener('change', () => {
+        const newType = sel.value;
+        if (!newType) return;
+        layer.type = newType;
+        this._rebuildLayerList();
+        this._rebuildLayerKnobs();
+        this._pushHistory();
+      });
+
+      prompt.appendChild(msg);
+      prompt.appendChild(sel);
+      container.appendChild(prompt);
+      return; // no knobs for a blank layer
+    }
 
     // Header
     const header = document.createElement('div');
