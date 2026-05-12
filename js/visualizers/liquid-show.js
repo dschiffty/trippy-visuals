@@ -3776,16 +3776,7 @@ export class LiquidShowVisualizer {
     const layerButtons = document.createElement('div');
     layerButtons.className = 'll-layer-buttons';
 
-    // --- Add split button: [+] adds a wash layer, [\u25BE] shows Add / Blank menu ---
-    const addSplit = document.createElement('div');
-    addSplit.className = 'll-add-split';
-
-    const addMainBtn = this._makeBtn('+', 'Add Wash Layer');
-    addMainBtn.classList.add('ll-add-main');
-
-    const addArrowBtn = this._makeBtn('\u25BE', 'More add options');
-    addArrowBtn.classList.add('ll-add-arrow');
-
+    // --- Layer action buttons: Add Blank, Add Random, Duplicate, Delete ---
     const _doAddLayer = (type) => {
       if (this._globalLock) return;
       if (this.layers.length >= 6) return;
@@ -3796,46 +3787,29 @@ export class LiquidShowVisualizer {
       this._rebuildLayerKnobs();
       this._pushHistory();
     };
-    addMainBtn.addEventListener('click', () => _doAddLayer('wash'));
 
-    const addMenu = document.createElement('div');
-    addMenu.className = 'll-add-menu';
-    addMenu.style.display = 'none';
+    const addBlankBtn = document.createElement('button');
+    addBlankBtn.className = 'll-btn ll-icon-btn';
+    addBlankBtn.innerHTML = '<i class="ti ti-plus"></i>';
+    addBlankBtn.title = 'Add Blank Layer';
+    addBlankBtn.addEventListener('click', () => _doAddLayer('blank'));
 
-    const makeMenuItem = (label, fn) => {
-      const item = document.createElement('button');
-      item.className = 'll-add-menu-item';
-      item.textContent = label;
-      item.addEventListener('mousedown', (e) => {
-        e.preventDefault(); // prevent blur before click registers
-        addMenu.style.display = 'none';
-        fn();
-      });
-      return item;
-    };
-    addMenu.appendChild(makeMenuItem('Add Wash Layer', () => _doAddLayer('wash')));
-    addMenu.appendChild(makeMenuItem('Add Blank Layer', () => _doAddLayer('blank')));
-
-    addArrowBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      addMenu.style.display = addMenu.style.display === 'none' ? 'block' : 'none';
+    const addRandomBtn = document.createElement('button');
+    addRandomBtn.className = 'll-btn ll-icon-btn';
+    addRandomBtn.innerHTML = '<i class="ti ti-dice"></i>';
+    addRandomBtn.title = 'Add Random Layer';
+    addRandomBtn.addEventListener('click', () => {
+      if (this._globalLock) return;
+      if (this.layers.length >= 6) return;
+      const RANDOMIZABLE = LAYER_TYPES.filter(t => t !== 'webcam' && t !== 'blank');
+      const type = RANDOMIZABLE[Math.floor(Math.random() * RANDOMIZABLE.length)];
+      _doAddLayer(type);
     });
 
-    // Close the menu when clicking outside the split button
-    const _closeAddMenu = (e) => {
-      if (!addSplit.contains(e.target)) addMenu.style.display = 'none';
-    };
-    document.addEventListener('click', _closeAddMenu);
-    this._cleanupAddMenu = () => document.removeEventListener('click', _closeAddMenu);
-
-    addSplit.appendChild(addMainBtn);
-    addSplit.appendChild(addArrowBtn);
-    addSplit.appendChild(addMenu);
-
-    const dupBtn = this._makeBtn('\u29C9', 'Duplicate');
-    const delBtn = this._makeBtn('\u2715', 'Delete');
-    const upBtn = this._makeBtn('\u25B2', 'Move Up');
-    const downBtn = this._makeBtn('\u25BC', 'Move Down');
+    const dupBtn = document.createElement('button');
+    dupBtn.className = 'll-btn ll-icon-btn';
+    dupBtn.innerHTML = '<i class="ti ti-copy"></i>';
+    dupBtn.title = 'Duplicate Selected Layer';
     dupBtn.addEventListener('click', () => {
       if (this._globalLock) return;
       if (this.layers.length >= 6) return;
@@ -3849,6 +3823,11 @@ export class LiquidShowVisualizer {
       this._rebuildLayerKnobs();
       this._pushHistory();
     });
+
+    const delBtn = document.createElement('button');
+    delBtn.className = 'll-btn ll-icon-btn';
+    delBtn.innerHTML = '<i class="ti ti-trash"></i>';
+    delBtn.title = 'Delete Selected Layer';
     delBtn.addEventListener('click', () => {
       if (this._globalLock) return;
       if (this.layers.length <= 1) return;
@@ -3870,28 +3849,8 @@ export class LiquidShowVisualizer {
       this._rebuildLayerKnobs();
       this._pushHistory();
     });
-    upBtn.addEventListener('click', () => {
-      if (this._globalLock) return;
-      if (this.selectedLayerIndex <= 0) return;
-      const i = this.selectedLayerIndex;
-      [this.layers[i], this.layers[i-1]] = [this.layers[i-1], this.layers[i]];
-      this.selectedLayerIndex--;
-      this.selectedLayerIndices = new Set([this.selectedLayerIndex]);
-      this._rebuildLayerList();
-      this._pushHistory();
-    });
-    downBtn.addEventListener('click', () => {
-      if (this._globalLock) return;
-      if (this.selectedLayerIndex >= this.layers.length - 1) return;
-      const i = this.selectedLayerIndex;
-      [this.layers[i], this.layers[i+1]] = [this.layers[i+1], this.layers[i]];
-      this.selectedLayerIndex++;
-      this.selectedLayerIndices = new Set([this.selectedLayerIndex]);
-      this._rebuildLayerList();
-      this._pushHistory();
-    });
 
-    [addSplit, dupBtn, delBtn, upBtn, downBtn].forEach(b => layerButtons.appendChild(b));
+    [addBlankBtn, addRandomBtn, dupBtn, delBtn].forEach(b => layerButtons.appendChild(b));
     layersDiv.appendChild(layerList);
     layersDiv.appendChild(layerButtons);
 
@@ -3992,9 +3951,6 @@ export class LiquidShowVisualizer {
     this._panelKnobs = [];
     this._globalKnobs = [];
     this._bwKnobs = [];
-    // Clean up the add-menu document click listener
-    this._cleanupAddMenu?.();
-    this._cleanupAddMenu = null;
     // Clear the app's render callback so it doesn't write into detached DOM nodes
     if (this._app) this._app._llAudioStatusUpdate = null;
     this._app = null;
