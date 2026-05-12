@@ -2079,31 +2079,29 @@ class App {
       const savedW = this.canvas.width;
       const savedH = this.canvas.height;
 
-      // Resize canvas to full native DPR resolution (bypasses _qualityScale)
+      // Bump canvas to full native DPR resolution.
+      // _snapshotInProgress blocks resizeCanvas() and _adaptiveQualityUpdate()
+      // so nothing external will fight us while we're at the elevated resolution.
       const dpr = window.devicePixelRatio || 1;
       const container = this.canvas.parentElement;
       const rect = container.getBoundingClientRect();
       this.canvas.width  = Math.round(rect.width  * dpr);
       this.canvas.height = Math.round(rect.height * dpr);
 
-      // Render one high-res frame with the current audio data
-      let freq, time;
-      if (this.mic.active && this.mic.analyser) {
-        this.mic.analyser.getByteFrequencyData(this.mic.freqData);
-        this.mic.analyser.getByteTimeDomainData(this.mic.timeData);
-        freq = this.mic.freqData;
-        time = this.mic.timeData;
-      } else if (this.audio.isCapturing) {
-        freq = this.audio.getFrequencyData();
-        time = this.audio.getTimeDomainData();
-      } else {
-        const synth = this._generateSyntheticAudio(performance.now());
-        freq = synth.frequency;
-        time = synth.timeDomain;
-      }
-      this.activeVisualizer.draw(freq, time);
+      // Let the live animation loop render TWO complete frames at the new resolution
+      // rather than calling draw() manually.  This guarantees:
+      //   • All internal layer canvases resize correctly (compCanvas, bloomCanvas, etc.)
+      //   • _postProcess() runs with a properly populated canvas for its self-referential
+      //     drawImage() passes (bloom blur, softness, contrast, grain).
+      //   • LiquidLiteVisualizer.draw() wraps engine.draw() naturally, preserving
+      //     speed/intensity multipliers.
+      // Frame 1 → all buffers resize and render with correct audio data.
+      // Frame 2 → _postProcess has a real previous-frame canvas to read from,
+      //           producing correct bloom, softness, contrast and grain.
+      await new Promise(r => requestAnimationFrame(r));
+      await new Promise(r => requestAnimationFrame(r));
 
-      // Capture PNG — _snapshotInProgress holds resizeCanvas calls at bay during the await
+      // Capture the fully-composited final output from the main canvas
       const blob = await new Promise(resolve => this.canvas.toBlob(resolve, 'image/png'));
 
       // Restore canvas to its previous render dimensions
