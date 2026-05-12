@@ -2363,6 +2363,54 @@ body.popout-mode .control-panel {
   overflow-y: auto;
 }
 
+/* Fullscreen-restore overlay — shown when browser exits fullscreen on popup open */
+.ll-fs-restore-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 999999;
+  background: rgba(0, 0, 0, 0.72);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  animation: ll-fs-restore-fade-in 0.25s ease;
+}
+
+@keyframes ll-fs-restore-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.ll-fs-restore-box {
+  text-align: center;
+  color: #fff;
+  max-width: 340px;
+  padding: 40px 32px;
+  pointer-events: none;
+}
+
+.ll-fs-restore-icon {
+  font-size: 52px;
+  line-height: 1;
+  margin-bottom: 18px;
+  opacity: 0.9;
+}
+
+.ll-fs-restore-msg {
+  font-size: 17px;
+  font-weight: bold;
+  font-family: 'Tahoma', 'Microsoft Sans Serif', Arial, sans-serif;
+  margin-bottom: 10px;
+  letter-spacing: 0.01em;
+}
+
+.ll-fs-restore-hint {
+  font-size: 11px;
+  opacity: 0.6;
+  font-family: 'Tahoma', 'Microsoft Sans Serif', Arial, sans-serif;
+  line-height: 1.5;
+}
+
 /* --- Layer Controls (center) --- */
 .ll-layer-controls {
   flex: 1;

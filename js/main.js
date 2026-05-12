@@ -1882,36 +1882,47 @@ class App {
     url.searchParams.delete('debug');
     const features = 'width=460,height=900,menubar=no,toolbar=no,location=no,status=no,resizable=yes,scrollbars=yes';
 
-    // If we're in fullscreen, defer window.open() to the next tick.
-    // Opening a popup synchronously from within a fullscreen context causes
-    // Chrome to force-exit fullscreen. By deferring to the next event-loop
-    // tick the main window's fullscreen state is no longer the "current" context
-    // for the new window, so Chrome leaves it alone.
-    // NOTE: Chrome's user-activation model persists the gesture token across a
-    // single setTimeout(0), so popup-blocker policy still allows the open.
-    const doOpen = () => {
-      this.popoutWindow = window.open(url.toString(), 'll-controls', features);
-      if (!this.popoutWindow) {
-        alert('The browser blocked the popout window. Please allow popups for this site.');
-        return;
-      }
-      this._enterPoppedOutLayout();
-      if (this._popoutPollId) clearInterval(this._popoutPollId);
-      this._popoutPollId = setInterval(() => {
-        if (!this.popoutWindow || this.popoutWindow.closed) {
-          clearInterval(this._popoutPollId);
-          this._popoutPollId = null;
-          this.popoutWindow = null;
-          this._exitPoppedOutLayout();
-        }
-      }, 500);
-    };
+    const fsEl = document.fullscreenElement;
 
-    if (document.fullscreenElement) {
-      setTimeout(doOpen, 0);
+    if (fsEl) {
+      // Browsers force-exit fullscreen when a new window is opened.
+      // Best attempt: call exitFullscreen + window.open + requestFullscreen all
+      // synchronously within the same click-handler gesture so the browser has
+      // the best chance of honouring the re-entry without a new user gesture.
+      document.exitFullscreen();
+      this.popoutWindow = window.open(url.toString(), 'll-controls', features);
+      document.documentElement.requestFullscreen().catch(() => {});
     } else {
-      doOpen();
+      this.popoutWindow = window.open(url.toString(), 'll-controls', features);
     }
+
+    if (!this.popoutWindow) {
+      alert('The browser blocked the popout window. Please allow popups for this site.');
+      return;
+    }
+
+    this._enterPoppedOutLayout();
+
+    // After a short delay, check whether fullscreen was actually restored.
+    // If the browser refused the re-entry (common in Chrome), show a tap-to-
+    // restore overlay so the user can get back to fullscreen with one click.
+    if (fsEl) {
+      setTimeout(() => {
+        if (!document.fullscreenElement) {
+          this._showFullscreenRestoreOverlay();
+        }
+      }, 400);
+    }
+
+    if (this._popoutPollId) clearInterval(this._popoutPollId);
+    this._popoutPollId = setInterval(() => {
+      if (!this.popoutWindow || this.popoutWindow.closed) {
+        clearInterval(this._popoutPollId);
+        this._popoutPollId = null;
+        this.popoutWindow = null;
+        this._exitPoppedOutLayout();
+      }
+    }, 500);
   }
 
   closePopout() {
@@ -1931,12 +1942,64 @@ class App {
   _exitPoppedOutLayout() {
     if (this.isPopout) return;
     document.body.classList.remove('canvas-only-mode');
+    this._hideFullscreenRestoreOverlay();
     if (this._popoutPollId) {
       clearInterval(this._popoutPollId);
       this._popoutPollId = null;
     }
     this.popoutWindow = null;
     this.resizeCanvas?.();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Fullscreen-restore overlay
+  // Browsers exit fullscreen when window.open() is called. We try to re-enter
+  // synchronously, but if the browser refuses (gesture requirement not met) we
+  // show this overlay so the user can tap once to restore fullscreen.
+  // ---------------------------------------------------------------------------
+  _showFullscreenRestoreOverlay() {
+    if (this._fsRestoreOverlay) return; // already visible
+
+    const overlay = document.createElement('div');
+    overlay.className = 'll-fs-restore-overlay';
+    overlay.innerHTML = `
+      <div class="ll-fs-restore-box">
+        <div class="ll-fs-restore-icon">⛶</div>
+        <div class="ll-fs-restore-msg">Click anywhere to return to fullscreen</div>
+        <div class="ll-fs-restore-hint">Browsers exit fullscreen when a new window opens — tap once to restore it.</div>
+      </div>
+    `;
+
+    const reEnter = () => {
+      document.documentElement.requestFullscreen().catch(() => {});
+      this._hideFullscreenRestoreOverlay();
+    };
+    overlay.addEventListener('click', reEnter);
+    document.body.appendChild(overlay);
+    this._fsRestoreOverlay = overlay;
+    this._fsRestoreClickFn = reEnter;
+
+    // Also auto-dismiss if fullscreen is restored by any other means (e.g. F11)
+    const onFsChange = () => {
+      if (document.fullscreenElement) {
+        this._hideFullscreenRestoreOverlay();
+        document.removeEventListener('fullscreenchange', onFsChange);
+      }
+    };
+    document.addEventListener('fullscreenchange', onFsChange);
+    this._fsRestoreChangeFn = onFsChange;
+  }
+
+  _hideFullscreenRestoreOverlay() {
+    if (this._fsRestoreOverlay) {
+      this._fsRestoreOverlay.remove();
+      this._fsRestoreOverlay = null;
+    }
+    if (this._fsRestoreChangeFn) {
+      document.removeEventListener('fullscreenchange', this._fsRestoreChangeFn);
+      this._fsRestoreChangeFn = null;
+    }
+    this._fsRestoreClickFn = null;
   }
 }
 
