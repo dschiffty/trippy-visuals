@@ -2605,34 +2605,58 @@ export class LiquidShowVisualizer {
   // the chrome bars.  Mobile tap-to-hide takes a separate CSS-class path
   // via main.js; this method is for the desktop canvas-click path.
   _applyLLUIHidden(hidden) {
+    // ll-canvas-clean drives all chrome removal via CSS (!important rules cover
+    // .window border, .canvas-container border, .main-content padding, chrome bars).
+    document.body.classList.toggle('ll-canvas-clean', hidden);
+
+    // Belt-and-suspenders inline overrides (catches any !important edge cases)
     const controlPanel = document.querySelector('.control-panel');
     if (controlPanel) controlPanel.style.display = hidden ? 'none' : '';
     for (const cls of ['.title-bar', '.menu-bar', '.status-bar']) {
       const el = document.querySelector(cls);
       if (el) el.style.display = hidden ? 'none' : '';
     }
-    // Strip/restore the Win98 window border so clean-canvas mode is truly borderless
     const windowEl = document.querySelector('.window');
+    console.log('[LL] _applyLLUIHidden', hidden, 'windowEl:', windowEl);
     if (windowEl) {
       windowEl.style.border    = hidden ? 'none' : '';
       windowEl.style.boxShadow = hidden ? 'none' : '';
+      windowEl.style.background = hidden ? '#000' : '';
+    }
+    const canvasCont = document.querySelector('.canvas-container');
+    if (canvasCont) {
+      canvasCont.style.border    = hidden ? 'none' : '';
+      canvasCont.style.boxShadow = hidden ? 'none' : '';
+    }
+    const mainContent = document.querySelector('.main-content');
+    if (mainContent) {
+      mainContent.style.padding = hidden ? '0' : '';
     }
   }
 
   // Called by main.js on mobile tap-to-hide so the visualizer controls its own chrome.
   setUIHidden(hidden) {
     this._llUiHidden = hidden;
+    document.body.classList.toggle('ll-canvas-clean', hidden);
     // Panel visibility is already handled by main.js (ll-ui-hidden class).
-    // We only need to handle the extra chrome elements here.
     for (const cls of ['.title-bar', '.menu-bar', '.status-bar']) {
       const el = document.querySelector(cls);
       if (el) el.style.display = hidden ? 'none' : '';
     }
-    // Strip/restore Win98 border
     const windowEl = document.querySelector('.window');
     if (windowEl) {
       windowEl.style.border    = hidden ? 'none' : '';
       windowEl.style.boxShadow = hidden ? 'none' : '';
+      windowEl.style.background = hidden ? '#000' : '';
+    }
+    const canvasCont = document.querySelector('.canvas-container');
+    if (canvasCont) {
+      canvasCont.style.border    = hidden ? 'none' : '';
+      canvasCont.style.boxShadow = hidden ? 'none' : '';
+    }
+    const mainContent = document.querySelector('.main-content');
+    if (mainContent) {
+      mainContent.style.padding = hidden ? '0' : '';
     }
   }
 
@@ -3966,6 +3990,8 @@ export class LiquidShowVisualizer {
       this._llUiHidden = false;
       this._applyLLUIHidden(false);
     }
+    // Safety: always remove the canvas-clean class so chrome is visible after panel teardown
+    document.body.classList.remove('ll-canvas-clean');
     if (this._controlPanelEl) {
       this._controlPanelEl.classList.remove('ll-active');
       this._controlPanelEl = null;

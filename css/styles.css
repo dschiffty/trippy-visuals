@@ -2382,23 +2382,48 @@ html, body {
 }
 
 
-/* Canvas-only mode: hide all UI chrome, canvas fills viewport */
+/* ----------------------------------------------------------------
+   Shared chrome-stripping rules used by two code paths:
+     body.canvas-only-mode  — popout open (_enterPoppedOutLayout)
+     body.ll-canvas-clean   — canvas clicked to hide UI (_applyLLUIHidden)
+   Both classes apply the same full chrome removal so the canvas is
+   truly borderless and edge-to-edge in either scenario.
+   ---------------------------------------------------------------- */
+
+/* Hide all chrome bars */
 body.canvas-only-mode .title-bar,
 body.canvas-only-mode .menu-bar,
 body.canvas-only-mode .control-panel,
-body.canvas-only-mode .status-bar {
+body.canvas-only-mode .status-bar,
+body.ll-canvas-clean .title-bar,
+body.ll-canvas-clean .menu-bar,
+body.ll-canvas-clean .control-panel,
+body.ll-canvas-clean .status-bar {
   display: none !important;
 }
-body.canvas-only-mode .window {
-  border: none;
-  box-shadow: none;
+
+/* Strip .window outer Win98 border + inset shadow + grey background */
+body.canvas-only-mode .window,
+body.ll-canvas-clean .window {
+  border: none !important;
+  box-shadow: none !important;
+  background: #000 !important;
 }
-body.canvas-only-mode .main-content {
+
+/* Remove the 4px padding gap inside .main-content */
+body.canvas-only-mode .main-content,
+body.ll-canvas-clean .main-content {
   flex: 1;
+  padding: 0 !important;
 }
-body.canvas-only-mode .canvas-container {
-  width: 100vw;
-  height: 100vh;
+
+/* Strip .canvas-container inset Win98 border + shadow, fill full viewport */
+body.canvas-only-mode .canvas-container,
+body.ll-canvas-clean .canvas-container {
+  width: 100vw !important;
+  height: 100vh !important;
+  border: none !important;
+  box-shadow: none !important;
 }
 
 /* Popout window: hide canvas area + menu bar; keep Win98 chrome (title bar, status bar) */
