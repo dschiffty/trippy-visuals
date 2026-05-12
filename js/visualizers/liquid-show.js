@@ -3744,6 +3744,23 @@ export class LiquidShowVisualizer {
     });
     presetRow.appendChild(blankBtn);
 
+    // Pop Out Controls button — opens the panel in a separate window
+    // (Hidden when we're already inside the popout window)
+    if (app && !app.isPopout) {
+      const popoutBtn = document.createElement('button');
+      popoutBtn.className = 'll-popout-btn';
+      popoutBtn.innerHTML = '⧉ Pop Out Controls';
+      popoutBtn.title = 'Detach this panel into a separate window';
+      popoutBtn.addEventListener('click', () => {
+        if (app.popoutWindow && !app.popoutWindow.closed) {
+          app.popoutWindow.focus();
+        } else {
+          app.openPopout?.();
+        }
+      });
+      presetRow.appendChild(popoutBtn);
+    }
+
     panel.appendChild(presetRow);
 
     const layout = document.createElement('div');
@@ -4015,6 +4032,10 @@ export class LiquidShowVisualizer {
     }
     this._historyIndex = this._history.length - 1;
     this._updateHistoryButtons();
+    // Broadcast state to popout / main window (if a cross-window sync is wired up)
+    if (this.onStateChange && !this._suppressBroadcast) {
+      try { this.onStateChange(this.getState()); } catch (e) { console.warn('[liquid-show] state broadcast failed:', e); }
+    }
   }
 
   _undo() {

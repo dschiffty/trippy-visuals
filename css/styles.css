@@ -2308,6 +2308,94 @@ html, body {
   border-color: #666;
 }
 
+/* Pop Out Controls button (inline in the LL preset row) */
+.ll-popout-btn {
+  flex-shrink: 0;
+  padding: 2px 9px;
+  font-size: 10px;
+  font-family: inherit;
+  cursor: pointer;
+  background: linear-gradient(180deg, #4a76e6 0%, #2a55c8 100%);
+  border: 1px solid #1a3da8;
+  border-radius: 3px;
+  color: #fff;
+  font-weight: bold;
+  white-space: nowrap;
+}
+.ll-popout-btn:hover {
+  background: linear-gradient(180deg, #5c87f0 0%, #3565d8 100%);
+}
+.ll-popout-btn:active {
+  background: linear-gradient(180deg, #2a55c8 0%, #4a76e6 100%);
+}
+
+/* Floating "Controls" reopener button in main window when popped out */
+.ll-popout-reopen-btn {
+  position: fixed;
+  top: 12px;
+  right: 12px;
+  z-index: 99999;
+  padding: 8px 14px;
+  font-size: 12px;
+  font-family: inherit;
+  font-weight: bold;
+  cursor: pointer;
+  background: rgba(20, 20, 28, 0.75);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 6px;
+  color: #fff;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+  transition: opacity 0.2s, background 0.2s;
+  opacity: 0.6;
+}
+.ll-popout-reopen-btn:hover {
+  opacity: 1;
+  background: rgba(40, 60, 120, 0.85);
+}
+
+/* Canvas-only mode: hide all UI chrome, canvas fills viewport */
+body.canvas-only-mode .title-bar,
+body.canvas-only-mode .menu-bar,
+body.canvas-only-mode .control-panel,
+body.canvas-only-mode .status-bar {
+  display: none !important;
+}
+body.canvas-only-mode .window {
+  border: none;
+  box-shadow: none;
+}
+body.canvas-only-mode .main-content {
+  flex: 1;
+}
+body.canvas-only-mode .canvas-container {
+  width: 100vw;
+  height: 100vh;
+}
+
+/* Popout window: hide everything that isn't the LL control panel */
+body.popout-mode .title-bar,
+body.popout-mode .menu-bar,
+body.popout-mode .main-content,
+body.popout-mode .status-bar {
+  display: none !important;
+}
+body.popout-mode {
+  background: #008080;
+}
+body.popout-mode .window {
+  height: 100vh;
+  border: none;
+  box-shadow: none;
+}
+body.popout-mode .control-panel {
+  height: 100vh;
+  max-height: 100vh;
+  overflow: auto;
+  flex: 1;
+}
+
 /* --- Layer Controls (center) --- */
 .ll-layer-controls {
   flex: 1;

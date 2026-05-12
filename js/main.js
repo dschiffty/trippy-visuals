@@ -9,6 +9,7 @@ import { ITunesVisualizer } from './visualizers/itunes.js';
 import { LiquidLiteVisualizer } from './visualizers/liquid-lite.js';
 import { CameraVisualizer } from './visualizers/camera.js';
 import { ControlPanel } from './controls.js';
+import { PopoutSync, isPopoutMode } from './popout-sync.js';
 
 const VIZ_CLASSES = {
   liquidLite: LiquidLiteVisualizer,
@@ -34,6 +35,12 @@ class App {
     this.frameCount = 0;
     this.targetFps = 60;
     this.lastFrameTime = 0;
+
+    // Pop-out controls support
+    this.isPopout = isPopoutMode();
+    this.popoutWindow = null;
+    this._popoutPollId = null;
+    if (this.isPopout) document.body.classList.add('popout-mode');
 
     // Adaptive quality system
     this._qualityScale = 1.0;       // 1.0 = full CSS resolution, 0.5 = half
@@ -64,9 +71,10 @@ class App {
       this.visualizers[key] = new Cls(this.canvas);
     }
     // Default to Liquid Lite on mobile, Liquid Lights on desktop
+    // Popout windows are always Liquid Lights (the only mode that supports popout).
     const isMobileDevice = /Android|iPhone|iPad|iPod|webOS|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent)
       || (navigator.maxTouchPoints > 1 && window.innerWidth < 1024);
-    const defaultKey = isMobileDevice ? 'liquidLite' : 'liquidShow';
+    const defaultKey = this.isPopout ? 'liquidShow' : (isMobileDevice ? 'liquidLite' : 'liquidShow');
     this.activeKey = defaultKey;
     this.previousKey = null;
     this.activeVisualizer = this.visualizers[defaultKey];
@@ -98,35 +106,42 @@ class App {
     this.resizeCanvas();
 
     // Pre-warm all renderers to avoid JIT compilation stalls
-    this._preWarmRenderers();
+    // (Skip in popout — no rendering happens there)
+    if (!this.isPopout) this._preWarmRenderers();
 
     // Start visual demo immediately so the app feels alive on load
-    this.startAnimation();
+    if (!this.isPopout) this.startAnimation();
 
     // Responsive canvas
-    const ro = new ResizeObserver(() => {
-      this.resizeCanvas();
-    });
-    ro.observe(this.canvas.parentElement);
+    if (!this.isPopout) {
+      const ro = new ResizeObserver(() => {
+        this.resizeCanvas();
+      });
+      ro.observe(this.canvas.parentElement);
 
-    // Handle orientation changes on mobile (Safari doesn't always fire ResizeObserver)
-    window.addEventListener('orientationchange', () => {
-      setTimeout(() => this.resizeCanvas(), 100);
-      setTimeout(() => this.resizeCanvas(), 300);
-    });
-    window.addEventListener('resize', () => this.resizeCanvas());
+      // Handle orientation changes on mobile (Safari doesn't always fire ResizeObserver)
+      window.addEventListener('orientationchange', () => {
+        setTimeout(() => this.resizeCanvas(), 100);
+        setTimeout(() => this.resizeCanvas(), 300);
+      });
+      window.addEventListener('resize', () => this.resizeCanvas());
+    }
 
     // Debug HUD (activated via ?debug=true)
-    if (new URLSearchParams(window.location.search).get('debug') === 'true') {
+    if (new URLSearchParams(window.location.search).get('debug') === 'true' && !this.isPopout) {
       this._setupDebugHUD();
     }
 
     // Start in demo mode immediately — no audio prompt on load
     this.overlay.classList.add('hidden');
-    this.statusText.textContent = 'Demo mode';
+    this.statusText.textContent = this.isPopout ? 'Controls (popout)' : 'Demo mode';
 
-    // Silently check if mic permission was already granted and auto-connect
-    setTimeout(() => this._checkMicPermissionOnLoad(), 1000);
+    // Silently check if mic permission was already granted and auto-connect.
+    // In popout we never start mic locally — main window owns audio.
+    if (!this.isPopout) setTimeout(() => this._checkMicPermissionOnLoad(), 1000);
+
+    // Wire up cross-window sync (BroadcastChannel)
+    this._setupPopoutSync();
   }
 
   /* ---- Controls ---- */
@@ -154,6 +169,11 @@ class App {
   }
 
   switchPreset(key) {
+    // Switching away from Liquid Lights closes the popout (popout only supports LL).
+    if (!this.isPopout && this.activeKey === 'liquidShow' && key !== 'liquidShow' && this.popoutWindow) {
+      this.closePopout();
+    }
+
     // Tear down previous custom panel if it existed
     if (this.activeVisualizer && this.activeVisualizer.destroyPanel) {
       this.activeVisualizer.destroyPanel();
@@ -936,6 +956,8 @@ class App {
     if (this._floatingMicBtn) {
       this._floatingMicBtn.classList.toggle('mic-active', this.mic.active || this.audio.isCapturing);
     }
+    // Broadcast audio state to popout (no-op when popped out)
+    this._broadcastAudioState?.();
   }
 
   // On load: silently check if mic was previously granted and auto-connect.
@@ -1699,6 +1721,211 @@ class App {
     overlay.appendChild(box);
 
     return overlay;
+  }
+
+  /* ============================================================
+     Pop-Out Controls
+     ============================================================ */
+
+  _setupPopoutSync() {
+    this.popoutSync = new PopoutSync(this.isPopout ? 'popout' : 'main');
+
+    // Hook visualizer state changes → broadcast
+    const liquidShow = this.visualizers.liquidShow;
+    if (liquidShow) {
+      liquidShow.onStateChange = (state) => {
+        this.popoutSync.send('state', state);
+      };
+    }
+
+    // Receive remote state → apply locally without re-broadcasting
+    this.popoutSync.on('state', (state) => {
+      const viz = this.visualizers.liquidShow;
+      if (!viz) return;
+      viz._suppressBroadcast = true;
+      try { viz.setState(state); } finally { viz._suppressBroadcast = false; }
+    });
+
+    if (this.isPopout) {
+      // Popout-side bookkeeping
+      // Override audio methods so panel button clicks broadcast to main
+      // instead of trying to run locally (no audio context in popout).
+      this.connectAudio  = () => { this.popoutSync.send('audio-action', { action: 'connectAudio' }); };
+      this.switchAudio   = () => { this.popoutSync.send('audio-action', { action: 'switchAudio' }); };
+      this.stopMic       = () => { this.popoutSync.send('audio-action', { action: 'disconnectAudio' }); };
+      this.stopCapture   = () => { this.popoutSync.send('audio-action', { action: 'disconnectAudio' }); };
+      this.toggleMic     = () => { this.popoutSync.send('audio-action', { action: 'toggleMic' }); };
+      this.setMicGain    = (value) => {
+        this.mic.gainValue = value;              // mirror locally so the slider tracks itself
+        this.popoutSync.send('audio-action', { action: 'setMicGain', args: { value } });
+      };
+
+      // Mode selector in popout: broadcast mode-switch to main, then close ourselves.
+      // Main will run switchPreset, and if the new mode isn't Liquid Lights it'll
+      // also close us via closePopout (defensive double-close is fine).
+      this.controls.onPresetChange = (key) => {
+        if (key === this.activeKey) return;
+        this.popoutSync.send('switch-mode', { key });
+        setTimeout(() => window.close(), 80); // small delay so the broadcast lands
+      };
+
+      // When main responds with state, our setState applies it.
+      // Ask main for the latest state so we start in sync.
+      this.popoutSync.send('request-state');
+
+      // Audio state sync (main → popout)
+      this.popoutSync.on('audio-state', (audioState) => {
+        this._applyRemoteAudioState(audioState);
+      });
+
+      // Notify main when we close so it can restore inline UI
+      window.addEventListener('pagehide', () => {
+        this.popoutSync.send('closing');
+      });
+    } else {
+      // Main-side: respond to popout's state request
+      this.popoutSync.on('request-state', () => {
+        const viz = this.visualizers.liquidShow;
+        if (viz) this.popoutSync.send('state', viz.getState());
+        // Also push current audio state so popout's UI starts in sync
+        this._broadcastAudioState();
+      });
+
+      // Popout announced it's up → switch to canvas-only mode
+      this.popoutSync.on('hello', () => {
+        if (this.activeKey === 'liquidShow') this._enterPoppedOutLayout();
+        const viz = this.visualizers.liquidShow;
+        if (viz) this.popoutSync.send('state', viz.getState());
+        this._broadcastAudioState();
+      });
+
+      // Popout closed (graceful) → restore inline panel
+      this.popoutSync.on('closing', () => {
+        this._exitPoppedOutLayout();
+      });
+
+      // Audio actions from popout
+      this.popoutSync.on('audio-action', ({ action, args } = {}) => {
+        this._handleRemoteAudioAction(action, args);
+      });
+
+      // Mode switch requested from popout
+      this.popoutSync.on('switch-mode', ({ key } = {}) => {
+        if (!key || key === this.activeKey) return;
+        this.switchPreset(key);
+        // Sync the inline preset buttons highlight to match
+        this.controls.setupPresets(
+          Object.entries(VIZ_CLASSES).map(([k, C]) => ({
+            key: k,
+            label: C.label,
+            mobileOnly: !!C.mobileOnly,
+            desktopOnly: DESKTOP_ONLY_MODES.has(k),
+          })),
+          key,
+        );
+      });
+    }
+  }
+
+  _broadcastAudioState() {
+    if (!this.popoutSync || this.isPopout) return;
+    this.popoutSync.send('audio-state', {
+      micActive: !!this.mic.active,
+      micGainValue: this.mic.gainValue,
+      audioCapturing: !!this.audio?.isCapturing,
+    });
+  }
+
+  _applyRemoteAudioState(audioState) {
+    // Mirror audio state in the popout so the LL panel reflects reality.
+    if (!audioState) return;
+    this.mic.active = !!audioState.micActive;
+    this.mic.gainValue = audioState.micGainValue ?? this.mic.gainValue;
+    if (this.audio) this.audio.isCapturing = !!audioState.audioCapturing;
+    // Repaint LL audio source panel
+    if (typeof this._llAudioStatusUpdate === 'function') this._llAudioStatusUpdate();
+  }
+
+  _handleRemoteAudioAction(action, args) {
+    if (this.isPopout) return;
+    switch (action) {
+      case 'connectAudio':  this.connectAudio?.(null); break;
+      case 'switchAudio':   this.switchAudio?.(null);  break;
+      case 'disconnectAudio':
+        if (this.mic.active) this.stopMic?.();
+        if (this.audio?.isCapturing) this.audio.stop?.();
+        this._broadcastAudioState();
+        break;
+      case 'toggleMic':     this.toggleMic?.(); break;
+      case 'setMicGain':    if (typeof args?.value === 'number') this.setMicGain?.(args.value); break;
+    }
+  }
+
+  openPopout() {
+    if (this.isPopout) return;
+    if (this.popoutWindow && !this.popoutWindow.closed) {
+      this.popoutWindow.focus();
+      return;
+    }
+    const url = new URL(location.href);
+    url.searchParams.set('popout', '1');
+    // Strip params that would mis-trigger features in the popout
+    url.searchParams.delete('debug');
+    const features = 'width=460,height=900,menubar=no,toolbar=no,location=no,status=no,resizable=yes,scrollbars=yes';
+    this.popoutWindow = window.open(url.toString(), 'll-controls', features);
+    if (!this.popoutWindow) {
+      alert('The browser blocked the popout window. Please allow popups for this site.');
+      return;
+    }
+    this._enterPoppedOutLayout();
+    // Watch for popout closure (covers cases where 'closing' message is missed)
+    if (this._popoutPollId) clearInterval(this._popoutPollId);
+    this._popoutPollId = setInterval(() => {
+      if (!this.popoutWindow || this.popoutWindow.closed) {
+        clearInterval(this._popoutPollId);
+        this._popoutPollId = null;
+        this.popoutWindow = null;
+        this._exitPoppedOutLayout();
+      }
+    }, 500);
+  }
+
+  closePopout() {
+    if (this.popoutWindow && !this.popoutWindow.closed) {
+      this.popoutWindow.close();
+    }
+    this.popoutWindow = null;
+    this._exitPoppedOutLayout();
+  }
+
+  _enterPoppedOutLayout() {
+    if (this.isPopout) return;
+    document.body.classList.add('canvas-only-mode');
+    this.resizeCanvas?.();
+    if (!this._popoutReopenBtn) {
+      const btn = document.createElement('button');
+      btn.className = 'll-popout-reopen-btn';
+      btn.innerHTML = '⧉ Controls';
+      btn.title = 'Re-open the controls popout';
+      btn.addEventListener('click', () => this.openPopout());
+      document.body.appendChild(btn);
+      this._popoutReopenBtn = btn;
+    }
+  }
+
+  _exitPoppedOutLayout() {
+    if (this.isPopout) return;
+    document.body.classList.remove('canvas-only-mode');
+    if (this._popoutReopenBtn) {
+      this._popoutReopenBtn.remove();
+      this._popoutReopenBtn = null;
+    }
+    if (this._popoutPollId) {
+      clearInterval(this._popoutPollId);
+      this._popoutPollId = null;
+    }
+    this.popoutWindow = null;
+    this.resizeCanvas?.();
   }
 }
 
