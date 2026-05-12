@@ -121,21 +121,21 @@ const LAYER_PARAMS = [
   // Core
   { key: 'scale', label: 'Scale', min: 0.1, max: 3, default: 1, step: 0.1, group: 'Core', tip: 'Size / amplitude of the pattern' },
   { key: 'speed', label: 'Speed', min: 0, max: 2, default: 0.5, step: 0.1, group: 'Core', tip: 'Animation speed' },
-  { key: 'opacity', label: 'Opacity', min: 0, max: 1, default: 0.8, step: 0.05, group: 'Core', tip: 'Layer transparency' },
+  { key: 'opacity', label: 'Opacity', min: 0, max: 1, default: 1.0, step: 0.05, group: 'Core', tip: 'Layer transparency' },
   // Motion
-  { key: 'drift', label: 'Drift', min: 0, max: 1, default: 0.3, step: 0.05, group: 'Motion', tip: 'Organic wandering movement' },
+  { key: 'drift', label: 'Drift', min: 0, max: 1, default: 0, step: 0.05, group: 'Motion', tip: 'Organic wandering movement' },
   { key: 'rotation', label: 'Rotate', min: 0, max: 1, default: 0, step: 0.05, group: 'Motion', tip: 'Rotational animation' },
   { key: 'zoom', label: 'Zoom', min: 1, max: 3, default: 1, step: 0.05, group: 'Motion', tip: 'Magnification level' },
   { key: 'mirror', label: 'Mirror', min: 0, max: 3, default: 0, step: 1, group: 'Motion', tip: 'Symmetry reflections (0–3 axes)' },
   // Effects
-  { key: 'turbulence', label: 'Turb', min: 0, max: 1, default: 0.5, step: 0.05, group: 'Effects', tip: 'Glow and distortion intensity' },
-  { key: 'distortion', label: 'Distort', min: 0, max: 1, default: 0.3, step: 0.05, group: 'Effects', tip: 'Persistence trails / decay' },
+  { key: 'turbulence', label: 'Turb', min: 0, max: 1, default: 0, step: 0.05, group: 'Effects', tip: 'Glow and distortion intensity' },
+  { key: 'distortion', label: 'Distort', min: 0, max: 1, default: 0, step: 0.05, group: 'Effects', tip: 'Persistence trails / decay' },
   { key: 'fade', label: 'Fade', min: 0, max: 1, default: 0, step: 0.05, group: 'Effects', tip: 'Edge fade vignette' },
   { key: 'tint', label: 'Tint', min: 0, max: 1, default: 0, step: 0.05, group: 'Effects', tip: 'Color wash overlay' },
   { key: 'invert', label: 'Invert', min: 0, max: 1, default: 0, step: 1, group: 'Effects', tip: 'Invert colors' },
   { key: 'brightness', label: 'Bright', min: -1, max: 1, default: 0, step: 0.05, group: 'Effects', tip: 'Layer brightness (-1 dark → 0 normal → +1 bright)' },
   // Audio
-  { key: 'reactivity', label: 'React', min: 0, max: 2, default: 0.5, step: 0.05, group: 'Audio', tip: 'How much audio affects this layer' },
+  { key: 'reactivity', label: 'React', min: 0, max: 2, default: 0, step: 0.05, group: 'Audio', tip: 'How much audio affects this layer' },
 ];
 
 const GLOBAL_PARAMS = [
@@ -5558,14 +5558,21 @@ export class LiquidShowVisualizer {
         if (this._isLayerLocked(idx)) return;
         const tgt = this.layers[idx];
         if (!tgt) continue;
-        // Reset standard params to LAYER_PARAMS defaults
-        LAYER_PARAMS.forEach(p => { tgt.params[p.key] = p.default; });
-        // Reset hue, colorMode, blendMode, audioSource
-        tgt.hue = 0;
-        tgt.colorMode = 'color';
-        tgt.blendMode = 'screen';
-        tgt.audioSource = 'full';
-        // Reset layer-specific params
+
+        // Build a fresh layer of the same type — this is the single source of
+        // truth for what defaults look like, identical to clicking "+".
+        const fresh = this._createLayer(tgt.type);
+
+        // Apply fresh standard params and top-level properties.
+        // Preserve: type, visible, locked, offset (position), masks.
+        Object.assign(tgt.params, fresh.params);
+        tgt.blendMode   = fresh.blendMode;
+        tgt.audioSource = fresh.audioSource;
+        tgt.audioSync   = fresh.audioSync;
+        tgt.colorMode   = fresh.colorMode;
+        // Preserve tgt.hue so the layer keeps its colour identity after reset.
+
+        // Reset layer-specific runtime state that _createLayer() doesn't cover
         if (tgt.type === 'image') {
           tgt._imgPanMode    = 'off';
           tgt._imgPanSpeed   = 0.3;
@@ -5573,20 +5580,19 @@ export class LiquidShowVisualizer {
           tgt._panAccCanvas  = null;
         }
         if (tgt.type === 'stars') {
-          tgt._starsRotSpeed      = 0;
-          tgt._starsRotDir        = 'cw';
-          tgt._starsRotAngle      = undefined;
-          tgt._starsThickness     = 1.0;
-          tgt._starsOriginRadius  = 0;
-          tgt._starsFlowDir       = 'forward';
-          tgt._starsParticleShape = 'streak';
-          tgt._starsSize          = 1.0;
-          tgt._starsTailLength    = 1.0;
-          tgt._stars              = null;
-          tgt._hyperspace         = false;
-          tgt._hyperspaceSnapshot = null;
+          tgt._starsRotSpeed            = 0;
+          tgt._starsRotDir              = 'cw';
+          tgt._starsRotAngle            = undefined;
+          tgt._starsThickness           = 1.0;
+          tgt._starsOriginRadius        = 0;
+          tgt._starsFlowDir             = 'forward';
+          tgt._starsParticleShape       = 'streak';
+          tgt._starsSize                = 1.0;
+          tgt._starsTailLength          = 1.0;
+          tgt._stars                    = null;
+          tgt._hyperspace               = false;
+          tgt._hyperspaceSnapshot       = null;
           tgt._hyperspaceGlobalSnapshot = null;
-          // If multicolor was active, restore a normal hue
           if (tgt.hue > 360) tgt.hue = tgt._savedHue ?? 180;
         }
         if (tgt.type === 'lightning') {
