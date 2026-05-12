@@ -2611,6 +2611,12 @@ export class LiquidShowVisualizer {
       const el = document.querySelector(cls);
       if (el) el.style.display = hidden ? 'none' : '';
     }
+    // Strip/restore the Win98 window border so clean-canvas mode is truly borderless
+    const windowEl = document.querySelector('.window');
+    if (windowEl) {
+      windowEl.style.border    = hidden ? 'none' : '';
+      windowEl.style.boxShadow = hidden ? 'none' : '';
+    }
   }
 
   // Called by main.js on mobile tap-to-hide so the visualizer controls its own chrome.
@@ -2621,6 +2627,12 @@ export class LiquidShowVisualizer {
     for (const cls of ['.title-bar', '.menu-bar', '.status-bar']) {
       const el = document.querySelector(cls);
       if (el) el.style.display = hidden ? 'none' : '';
+    }
+    // Strip/restore Win98 border
+    const windowEl = document.querySelector('.window');
+    if (windowEl) {
+      windowEl.style.border    = hidden ? 'none' : '';
+      windowEl.style.boxShadow = hidden ? 'none' : '';
     }
   }
 
@@ -5701,14 +5713,18 @@ export class LiquidShowVisualizer {
     toolbar.appendChild(lockAllBtn);
     toolbar.appendChild(resetBtn);
 
-    // Snapshot button — only shown in main window (not in the detached popout)
-    if (this._app && !this._app.isPopout) {
+    // Snapshot button — visible in both main window and the detached popout
+    {
       const snapshotBtn = document.createElement('button');
       snapshotBtn.className = 'param-tool-btn ll-snapshot-btn';
       snapshotBtn.innerHTML = '<i class="ti ti-camera"></i> Snapshot';
       snapshotBtn.title = 'Save full-resolution PNG (at native display DPR)';
       snapshotBtn.addEventListener('click', async () => {
-        if (!this._app) return;
+        // In popout mode the canvas lives in the opener window — snapshot there
+        const appForSnap = (this._app?.isPopout && window.opener?.__app)
+          ? window.opener.__app
+          : this._app;
+        if (!appForSnap) return;
         const origHTML = snapshotBtn.innerHTML;
         snapshotBtn.textContent = 'Capturing…';
         snapshotBtn.disabled = true;
@@ -5716,7 +5732,7 @@ export class LiquidShowVisualizer {
           const presetName = this._currentPresetId
             ? (LL_PRESETS.find(p => p.id === this._currentPresetId)?.name ?? 'liquid-lights')
             : 'liquid-lights';
-          await this._app.takeSnapshot(presetName.replace(/\s+/g, '-').toLowerCase());
+          await appForSnap.takeSnapshot(presetName.replace(/\s+/g, '-').toLowerCase());
         } finally {
           snapshotBtn.innerHTML = origHTML;
           snapshotBtn.disabled = false;

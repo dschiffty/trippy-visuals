@@ -2115,8 +2115,11 @@ class App {
       const ts = new Date().toISOString().slice(0, 19).replace(/[T:]/g, '-');
       const filename = `${label}-${ts}.png`;
 
-      // Mobile/iOS: native share sheet so the user can save to camera roll
-      if (navigator.canShare) {
+      // Mobile only: use the native share sheet (lets iOS save to camera roll).
+      // navigator.canShare exists on Mac Chrome too, so we guard with a UA check
+      // to avoid accidentally opening the macOS share sheet on desktop.
+      const isMobileUA = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+      if (isMobileUA && navigator.canShare) {
         const file = new File([blob], filename, { type: 'image/png' });
         if (navigator.canShare({ files: [file] })) {
           try {
@@ -2128,7 +2131,7 @@ class App {
         }
       }
 
-      // Desktop: trigger a PNG download
+      // Desktop (and mobile fallback): direct <a download> into Downloads folder
       this._downloadBlob(blob, filename);
       return filename;
     } finally {
