@@ -3801,9 +3801,15 @@ export class LiquidShowVisualizer {
     addRandomBtn.addEventListener('click', () => {
       if (this._globalLock) return;
       if (this.layers.length >= 6) return;
-      const RANDOMIZABLE = LAYER_TYPES.filter(t => t !== 'webcam' && t !== 'blank');
-      const type = RANDOMIZABLE[Math.floor(Math.random() * RANDOMIZABLE.length)];
-      _doAddLayer(type);
+      // Push a placeholder; _randomizeLayerAt picks type + fully randomizes all params
+      this.layers.push(this._createLayer('wash'));
+      const newIdx = this.layers.length - 1;
+      this.selectedLayerIndex = newIdx;
+      this.selectedLayerIndices = new Set([newIdx]);
+      this._randomizeLayerAt(newIdx);
+      this._rebuildLayerList();
+      this._rebuildLayerKnobs();
+      this._pushHistory();
     });
 
     const dupBtn = document.createElement('button');
@@ -6042,7 +6048,7 @@ export class LiquidShowVisualizer {
   _randomizeLayerAt(layerIndex) {
     const layer = this.layers[layerIndex];
     if (!layer) return;
-    const RANDOMIZABLE_TYPES = LAYER_TYPES.filter(t => t !== 'webcam');
+    const RANDOMIZABLE_TYPES = LAYER_TYPES.filter(t => t !== 'webcam' && t !== 'blank');
     const newType = RANDOMIZABLE_TYPES[Math.floor(Math.random() * RANDOMIZABLE_TYPES.length)];
     layer.type = newType;
     if (newType === 'image') {
@@ -6051,6 +6057,11 @@ export class LiquidShowVisualizer {
       layer.imageData = img;
       layer._imgCanvas = null;
       layer._imgPixels = null;
+      // Randomize image-specific settings
+      const panModes = ['off', 'pendulum', 'wander', 'wave'];
+      layer._imgPanMode    = panModes[Math.floor(Math.random() * panModes.length)];
+      layer._imgPanSpeed   = parseFloat((0.1 + Math.random() * 0.8).toFixed(2));
+      layer._imgMotionBlur = Math.random() < 0.5 ? 0 : parseFloat((Math.random() * 0.7).toFixed(2));
     }
     if (newType === 'lissajous') {
       layer._lissajousShape = 1 + Math.floor(Math.random() * 9);
@@ -6080,6 +6091,13 @@ export class LiquidShowVisualizer {
       layer._lightIntensity = 0.3 + Math.random() * 0.6;
       layer._lightBranching = Math.random();
       layer._lightDuration  = 0.15 + Math.random() * 0.7;
+    }
+    // Spin rotation for types that support it
+    if (SPIN_LAYER_TYPES.has(newType)) {
+      // 40% chance of no spin, otherwise a light-to-moderate spin speed
+      layer._spinSpeed = Math.random() < 0.4 ? 0 : parseFloat((0.5 + Math.random() * 4.5).toFixed(1));
+      layer._spinDir   = Math.random() < 0.5 ? 'cw' : 'ccw';
+      layer._spinAngle = 0;
     }
     this._randomizeLayerParams(layer);
     // 30% chance of multicolor for stars (must run after _randomizeLayerParams sets hue)
