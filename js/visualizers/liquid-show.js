@@ -3802,11 +3802,19 @@ export class LiquidShowVisualizer {
       if (this._globalLock) return;
       if (this.layers.length >= 6) return;
       // Push a placeholder; _randomizeLayerAt picks type + fully randomizes all params
+      const existingCount = this.layers.length; // how many layers before this one
       this.layers.push(this._createLayer('wash'));
       const newIdx = this.layers.length - 1;
       this.selectedLayerIndex = newIdx;
       this.selectedLayerIndices = new Set([newIdx]);
       this._randomizeLayerAt(newIdx);
+      // Scale opacity to the existing layer count so new layers don't wash out or disappear
+      let opMin, opMax;
+      if      (existingCount === 0) { opMin = 0.8; opMax = 1.0; }
+      else if (existingCount <= 2)  { opMin = 0.5; opMax = 0.8; }
+      else if (existingCount <= 4)  { opMin = 0.3; opMax = 0.6; }
+      else                           { opMin = 0.2; opMax = 0.4; }
+      this.layers[newIdx].params.opacity = parseFloat((opMin + Math.random() * (opMax - opMin)).toFixed(2));
       this._rebuildLayerList();
       this._rebuildLayerKnobs();
       this._pushHistory();
