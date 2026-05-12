@@ -151,6 +151,27 @@ class App {
 
     // Wire up cross-window sync (BroadcastChannel)
     this._setupPopoutSync();
+
+    // Popout: auto-fit window dimensions to actual content
+    if (this.isPopout) {
+      // Initial fit — run after first paint so the LL panel has been built
+      setTimeout(() => this._fitPopoutToContent(), 250);
+
+      // Re-fit whenever the DOM inside the panel changes (layers added/removed,
+      // sections rebuilt, etc.).  Start the observer after a short delay to
+      // skip the noisy initial build phase.
+      setTimeout(() => {
+        let _fitTimer = null;
+        const debouncedFit = () => {
+          clearTimeout(_fitTimer);
+          _fitTimer = setTimeout(() => this._fitPopoutToContent(), 200);
+        };
+        const mo = new MutationObserver(debouncedFit);
+        const panel = document.querySelector('.control-panel');
+        if (panel) mo.observe(panel, { subtree: true, childList: true });
+        this._popoutMO = mo;
+      }, 600);
+    }
   }
 
   /* ---- Controls ---- */
@@ -1753,6 +1774,8 @@ class App {
       if (!viz) return;
       viz._suppressBroadcast = true;
       try { viz.setState(state); } finally { viz._suppressBroadcast = false; }
+      // In popout: re-fit window height after the state-driven DOM update settles
+      if (this.isPopout) requestAnimationFrame(() => this._fitPopoutToContent());
     });
 
     if (this.isPopout) {
@@ -1880,7 +1903,7 @@ class App {
     url.searchParams.set('popout', '1');
     // Strip params that would mis-trigger features in the popout
     url.searchParams.delete('debug');
-    const features = 'width=460,height=900,menubar=no,toolbar=no,location=no,status=no,resizable=yes,scrollbars=yes';
+    const features = 'width=760,height=640,menubar=no,toolbar=no,location=no,status=no,resizable=yes,scrollbars=yes';
 
     const fsEl = document.fullscreenElement;
 
@@ -1949,6 +1972,42 @@ class App {
     }
     this.popoutWindow = null;
     this.resizeCanvas?.();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Popout auto-sizing
+  // Measures the control panel's natural content height (bypassing the flex
+  // stretch) and resizes the popout window to snugly wrap the content.
+  // ---------------------------------------------------------------------------
+  _fitPopoutToContent() {
+    if (!this.isPopout) return;
+    const panel = document.querySelector('.control-panel');
+    if (!panel) return;
+
+    // Temporarily override flex/height so the panel collapses to its natural
+    // content height.  We read offsetHeight (synchronous reflow) then restore
+    // before the browser has a chance to paint — no visible flash.
+    const s = panel.style;
+    const savedFlex   = s.flex;
+    const savedHeight = s.height;
+    const savedMaxH   = s.maxHeight;
+    s.flex      = '0 0 auto';
+    s.height    = 'auto';
+    s.maxHeight = 'none';
+    const naturalH = panel.offsetHeight; // forces reflow, no paint yet
+    s.flex      = savedFlex;
+    s.height    = savedHeight;
+    s.maxHeight = savedMaxH;
+
+    const titleH  = document.querySelector('.title-bar')?.offsetHeight  ?? 28;
+    const statusH = document.querySelector('.status-bar')?.offsetHeight ?? 22;
+    const desiredInner = titleH + naturalH + statusH + 16; // 16 px breathing room
+
+    const chromeH  = window.outerHeight - window.innerHeight;
+    const screenH  = window.screen?.availHeight ?? 1000;
+    const newH     = Math.min(desiredInner + chromeH, screenH - 60);
+
+    try { window.resizeTo(window.outerWidth, newH); } catch (_) {}
   }
 
   // ---------------------------------------------------------------------------
