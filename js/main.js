@@ -1872,11 +1872,22 @@ class App {
     // Strip params that would mis-trigger features in the popout
     url.searchParams.delete('debug');
     const features = 'width=460,height=900,menubar=no,toolbar=no,location=no,status=no,resizable=yes,scrollbars=yes';
+
+    // If fullscreen, opening a new window causes the browser to exit fullscreen.
+    // Capture the element now and re-request fullscreen immediately after open
+    // (both happen in the same user-gesture task, so requestFullscreen is permitted).
+    const fsEl = document.fullscreenElement || null;
+
     this.popoutWindow = window.open(url.toString(), 'll-controls', features);
     if (!this.popoutWindow) {
       alert('The browser blocked the popout window. Please allow popups for this site.');
       return;
     }
+
+    // Re-enter fullscreen synchronously within the same click handler so the
+    // browser honours the user-gesture requirement.
+    if (fsEl) fsEl.requestFullscreen?.().catch(() => {});
+
     this._enterPoppedOutLayout();
     // Watch for popout closure (covers cases where 'closing' message is missed)
     if (this._popoutPollId) clearInterval(this._popoutPollId);
@@ -1902,24 +1913,11 @@ class App {
     if (this.isPopout) return;
     document.body.classList.add('canvas-only-mode');
     this.resizeCanvas?.();
-    if (!this._popoutReopenBtn) {
-      const btn = document.createElement('button');
-      btn.className = 'll-popout-reopen-btn';
-      btn.innerHTML = '⧉ Controls';
-      btn.title = 'Re-open the controls popout';
-      btn.addEventListener('click', () => this.openPopout());
-      document.body.appendChild(btn);
-      this._popoutReopenBtn = btn;
-    }
   }
 
   _exitPoppedOutLayout() {
     if (this.isPopout) return;
     document.body.classList.remove('canvas-only-mode');
-    if (this._popoutReopenBtn) {
-      this._popoutReopenBtn.remove();
-      this._popoutReopenBtn = null;
-    }
     if (this._popoutPollId) {
       clearInterval(this._popoutPollId);
       this._popoutPollId = null;
