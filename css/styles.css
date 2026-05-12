@@ -2350,6 +2350,10 @@ body.canvas-only-mode .canvas-container {
 }
 
 /* Popout window: hide canvas area + menu bar; keep Win98 chrome (title bar, status bar) */
+body.popout-mode,
+body.popout-mode .window {
+  background: #c0c0c0 !important;
+}
 body.popout-mode .menu-bar,
 body.popout-mode .main-content {
   display: none !important;

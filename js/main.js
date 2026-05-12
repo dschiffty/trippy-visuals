@@ -40,7 +40,16 @@ class App {
     this.isPopout = isPopoutMode();
     this.popoutWindow = null;
     this._popoutPollId = null;
-    if (this.isPopout) document.body.classList.add('popout-mode');
+    if (this.isPopout) {
+      document.body.classList.add('popout-mode');
+      // Belt-and-suspenders: directly hide the canvas area in JS so the black
+      // canvas-container never shows even if the CSS class hasn't cascaded yet.
+      const mainContent = document.querySelector('.main-content');
+      const menuBar = document.querySelector('.menu-bar');
+      if (mainContent) mainContent.style.display = 'none';
+      if (menuBar) menuBar.style.display = 'none';
+      console.log('[Popout] mode active — isPopoutMode():', this.isPopout, '| body.popout-mode:', document.body.classList.contains('popout-mode'));
+    }
 
     // Adaptive quality system
     this._qualityScale = 1.0;       // 1.0 = full CSS resolution, 0.5 = half
@@ -1873,32 +1882,36 @@ class App {
     url.searchParams.delete('debug');
     const features = 'width=460,height=900,menubar=no,toolbar=no,location=no,status=no,resizable=yes,scrollbars=yes';
 
-    // If fullscreen, opening a new window causes the browser to exit fullscreen.
-    // Capture the element now and re-request fullscreen immediately after open
-    // (both happen in the same user-gesture task, so requestFullscreen is permitted).
-    const fsEl = document.fullscreenElement || null;
-
-    this.popoutWindow = window.open(url.toString(), 'll-controls', features);
-    if (!this.popoutWindow) {
-      alert('The browser blocked the popout window. Please allow popups for this site.');
-      return;
-    }
-
-    // Re-enter fullscreen synchronously within the same click handler so the
-    // browser honours the user-gesture requirement.
-    if (fsEl) fsEl.requestFullscreen?.().catch(() => {});
-
-    this._enterPoppedOutLayout();
-    // Watch for popout closure (covers cases where 'closing' message is missed)
-    if (this._popoutPollId) clearInterval(this._popoutPollId);
-    this._popoutPollId = setInterval(() => {
-      if (!this.popoutWindow || this.popoutWindow.closed) {
-        clearInterval(this._popoutPollId);
-        this._popoutPollId = null;
-        this.popoutWindow = null;
-        this._exitPoppedOutLayout();
+    // If we're in fullscreen, defer window.open() to the next tick.
+    // Opening a popup synchronously from within a fullscreen context causes
+    // Chrome to force-exit fullscreen. By deferring to the next event-loop
+    // tick the main window's fullscreen state is no longer the "current" context
+    // for the new window, so Chrome leaves it alone.
+    // NOTE: Chrome's user-activation model persists the gesture token across a
+    // single setTimeout(0), so popup-blocker policy still allows the open.
+    const doOpen = () => {
+      this.popoutWindow = window.open(url.toString(), 'll-controls', features);
+      if (!this.popoutWindow) {
+        alert('The browser blocked the popout window. Please allow popups for this site.');
+        return;
       }
-    }, 500);
+      this._enterPoppedOutLayout();
+      if (this._popoutPollId) clearInterval(this._popoutPollId);
+      this._popoutPollId = setInterval(() => {
+        if (!this.popoutWindow || this.popoutWindow.closed) {
+          clearInterval(this._popoutPollId);
+          this._popoutPollId = null;
+          this.popoutWindow = null;
+          this._exitPoppedOutLayout();
+        }
+      }, 500);
+    };
+
+    if (document.fullscreenElement) {
+      setTimeout(doOpen, 0);
+    } else {
+      doOpen();
+    }
   }
 
   closePopout() {
