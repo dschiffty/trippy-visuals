@@ -287,6 +287,15 @@ export class LiquidShowVisualizer {
     // Feathered mask compositing — reused offscreen canvases
     this._featherMaskCanvas = null;
     this._featherTmpCanvas  = null;
+
+    // Transform mode state
+    this._transformModeLayerIndex = -1;   // -1 = inactive
+    this._transformDragState      = null; // active drag
+    this._transformOverlayCanvas  = null; // overlay <canvas> over main canvas
+    this._transformOverlayRObs    = null; // ResizeObserver keeping overlay in sync
+    this._transformOverlayHandlers = null; // {oc, onDown, onMove, onUp, onLeave, onKey}
+    this._transformBtn            = null; // ref to the toggle button (for active state)
+    this._transformTmpCanvas      = null; // scratch canvas for pre-applying transforms
   }
 
   // --- Layer Creation ---
@@ -319,6 +328,10 @@ export class LiquidShowVisualizer {
       colorMode: overrides.colorMode || 'color',
       hue: overrides.hue ?? Math.random() * 360,
       offset: { x: Math.random() * 1000, y: Math.random() * 1000 },
+      // Pan/Transform: normalized position + scale applied during compositing.
+      // x/y = offset of layer centre as fraction of canvas width/height (0 = centred).
+      // scaleX/scaleY = size multiplier (1 = fills canvas exactly).
+      transform: { x: 0, y: 0, scaleX: 1, scaleY: 1 },
       // Mask system: array of shapes (rect/ellipse/freehand) in normalized 0-1 coords.
       // Stored as array to allow future multi-mask support without data migration.
       _masks: [],
@@ -375,6 +388,7 @@ export class LiquidShowVisualizer {
         masks: Array.isArray(l._masks) && l._masks.length > 0 ? this._cloneMasks(l._masks) : undefined,
         maskMode: Array.isArray(l._masks) && l._masks.length > 0 ? (l._maskMode ?? 'include') : undefined,
         maskFeather: (l._maskFeather ?? 0) > 0 ? l._maskFeather : undefined,
+        transform: l.transform ? { ...l.transform } : undefined,
       })),
       selectedLayerIndex: this.selectedLayerIndex,
       soloLayerIndex: this.soloLayerIndex,
@@ -469,6 +483,11 @@ export class LiquidShowVisualizer {
         }
         layer._maskMode    = saved.maskMode ?? 'include';
         layer._maskFeather = saved.maskFeather ?? 0;
+        // Restore transform (default = identity)
+        layer.transform = saved.transform
+          ? { x: saved.transform.x ?? 0, y: saved.transform.y ?? 0,
+              scaleX: saved.transform.scaleX ?? 1, scaleY: saved.transform.scaleY ?? 1 }
+          : { x: 0, y: 0, scaleX: 1, scaleY: 1 };
         return layer;
       });
     }
@@ -3512,18 +3531,39 @@ export class LiquidShowVisualizer {
       compCtx.globalCompositeOperation = layer.blendMode;
       compCtx.imageSmoothingEnabled = true;
       compCtx.imageSmoothingQuality = 'high';
+
+      // --- Pan/Transform: pre-apply to a temp canvas so masks work correctly ---
+      let srcCanvas = this.layerCanvases[i];
+      const t = layer.transform;
+      if (t && (t.x !== 0 || t.y !== 0 || t.scaleX !== 1 || t.scaleY !== 1)) {
+        if (!this._transformTmpCanvas) this._transformTmpCanvas = document.createElement('canvas');
+        const ttc = this._transformTmpCanvas;
+        if (ttc.width !== w || ttc.height !== h) { ttc.width = w; ttc.height = h; }
+        const ttCtx = ttc.getContext('2d');
+        ttCtx.clearRect(0, 0, w, h);
+        ttCtx.save();
+        ttCtx.imageSmoothingEnabled = true;
+        ttCtx.imageSmoothingQuality = 'high';
+        ttCtx.translate(w / 2 + t.x * w, h / 2 + t.y * h);
+        ttCtx.scale(t.scaleX, t.scaleY);
+        ttCtx.translate(-w / 2, -h / 2);
+        ttCtx.drawImage(this.layerCanvases[i], 0, 0, w, h);
+        ttCtx.restore();
+        srcCanvas = ttc;
+      }
+
       const hasMask = this._layerHasActiveMask(layer);
       const feather  = layer._maskFeather ?? 0;
       if (hasMask && feather > 0) {
         // Feathered mask: composite via alpha-channel approach
-        this._compositeLayerWithFeather(compCtx, this.layerCanvases[i], layer, w, h, feather);
+        this._compositeLayerWithFeather(compCtx, srcCanvas, layer, w, h, feather);
       } else if (hasMask) {
         compCtx.save();
         this._applyMaskClip(compCtx, layer, w, h);
-        compCtx.drawImage(this.layerCanvases[i], 0, 0, w, h);
+        compCtx.drawImage(srcCanvas, 0, 0, w, h);
         compCtx.restore();
       } else {
-        compCtx.drawImage(this.layerCanvases[i], 0, 0, w, h);
+        compCtx.drawImage(srcCanvas, 0, 0, w, h);
       }
     }
     compCtx.globalAlpha = 1;
@@ -3538,6 +3578,11 @@ export class LiquidShowVisualizer {
     // Mask edit mode overlay (drawn last, on top of everything)
     if (this._maskEditingLayerIndex >= 0) {
       this._drawMaskEditOverlay(w, h);
+    }
+
+    // Transform overlay (separate overlay canvas — not captured in snapshots)
+    if (this._transformModeLayerIndex >= 0) {
+      this._drawTransformOverlay();
     }
 
     timing.total = performance.now() - drawStart;
@@ -3950,6 +3995,9 @@ export class LiquidShowVisualizer {
       } catch (_) { /* permissions API not supported */ }
     })();
 
+    // Set up transform overlay canvas (persists until destroyPanel)
+    this._setupTransformOverlay();
+
     // Canvas click → toggle all UI chrome (desktop "clean canvas" mode)
     this._llUiHidden = false; // always start visible when panel is built
     if (this._canvasUIClickHandler) {
@@ -3975,6 +4023,9 @@ export class LiquidShowVisualizer {
   destroyPanel() {
     // Stop all active webcam streams
     this._stopAllWebcamLayers();
+    // Clean up transform mode
+    this._deactivateTransformMode();
+    this._removeTransformOverlay();
     // Clean up mask editor if active
     if (this._maskEditingLayerIndex >= 0) {
       this._exitMaskEditMode();
@@ -4176,6 +4227,11 @@ export class LiquidShowVisualizer {
       layer._masks       = Array.isArray(saved.masks) ? this._cloneMasks(saved.masks) : [];
       layer._maskMode    = saved.maskMode ?? 'include';
       layer._maskFeather = saved.maskFeather ?? 0;
+      // Restore transform
+      layer.transform = saved.transform
+        ? { x: saved.transform.x ?? 0, y: saved.transform.y ?? 0,
+            scaleX: saved.transform.scaleX ?? 1, scaleY: saved.transform.scaleY ?? 1 }
+        : { x: 0, y: 0, scaleX: 1, scaleY: 1 };
       return layer;
     });
 
@@ -4376,6 +4432,13 @@ export class LiquidShowVisualizer {
     if (!container) return;
     container.innerHTML = '';
     this._panelKnobs = [];
+    this._transformBtn = null; // reset ref — will be set again if toolbar is built
+
+    // Deactivate transform if selected layer changed (index mismatch)
+    if (this._transformModeLayerIndex >= 0 &&
+        this._transformModeLayerIndex !== this.selectedLayerIndex) {
+      this._deactivateTransformMode();
+    }
 
     const layer = this.layers[this.selectedLayerIndex];
     if (!layer) return;
@@ -5724,6 +5787,8 @@ export class LiquidShowVisualizer {
           tgt._spinDir   = 'cw';
           tgt._spinAngle = undefined;
         }
+        // Reset transform to identity
+        tgt.transform = { x: 0, y: 0, scaleX: 1, scaleY: 1 };
       }
       this._currentPresetId = null;
       if (this._presetSelect) this._presetSelect.value = '';
@@ -5738,6 +5803,25 @@ export class LiquidShowVisualizer {
     toolbar.appendChild(dynamicBtn);
     toolbar.appendChild(lockAllBtn);
     toolbar.appendChild(resetBtn);
+
+    // Transform button — toggle pan/resize mode for the selected layer
+    if (!isMulti && layer && layer.type !== 'blank') {
+      const isXformActive = this._transformModeLayerIndex === this.selectedLayerIndex;
+      const transformBtn = document.createElement('button');
+      transformBtn.className = 'param-tool-btn ll-transform-btn' + (isXformActive ? ' active' : '');
+      transformBtn.innerHTML = '⊞ Transform';
+      transformBtn.title = 'Drag to reposition and resize this layer. Drag corner handles to scale. Shift+corner = lock aspect ratio. Esc to exit.';
+      transformBtn.addEventListener('click', () => {
+        if (this._isLayerLocked(this.selectedLayerIndex)) return;
+        if (this._transformModeLayerIndex === this.selectedLayerIndex) {
+          this._deactivateTransformMode();
+        } else {
+          this._activateTransformMode(this.selectedLayerIndex);
+        }
+      });
+      this._transformBtn = transformBtn;
+      toolbar.appendChild(transformBtn);
+    }
 
     // Snapshot button — visible in both main window and the detached popout
     {
@@ -6386,5 +6470,358 @@ export class LiquidShowVisualizer {
       k.updateVisual();
       k.onChange(finalValue);
     });
+  }
+
+  // ============================================================
+  //  Pan / Transform Mode
+  // ============================================================
+
+  /** Create the transparent overlay canvas that shows bounding box + handles. */
+  _setupTransformOverlay() {
+    this._removeTransformOverlay();
+    const container = this.canvas.parentElement; // .canvas-container
+    if (!container) return;
+
+    const oc = document.createElement('canvas');
+    oc.style.cssText = [
+      'position:absolute;top:0;left:0;width:100%;height:100%;',
+      'pointer-events:none;z-index:10;',
+    ].join('');
+    container.appendChild(oc);
+    this._transformOverlayCanvas = oc;
+
+    // Keep overlay dimensions in sync with the container's display size
+    const sync = () => {
+      oc.width  = container.offsetWidth  || 1;
+      oc.height = container.offsetHeight || 1;
+      if (this._transformModeLayerIndex >= 0) this._drawTransformOverlay();
+    };
+    sync();
+    if (typeof ResizeObserver !== 'undefined') {
+      this._transformOverlayRObs = new ResizeObserver(sync);
+      this._transformOverlayRObs.observe(container);
+    }
+  }
+
+  /** Detach and remove the overlay canvas. */
+  _removeTransformOverlay() {
+    if (this._transformOverlayRObs) {
+      this._transformOverlayRObs.disconnect();
+      this._transformOverlayRObs = null;
+    }
+    this._detachTransformHandlers();
+    if (this._transformOverlayCanvas) {
+      this._transformOverlayCanvas.remove();
+      this._transformOverlayCanvas = null;
+    }
+  }
+
+  /** Activate transform mode for the given layer index. */
+  _activateTransformMode(layerIndex) {
+    // Exit mask edit mode if open — they share the canvas
+    if (this._maskEditingLayerIndex >= 0) this._exitMaskEditMode();
+
+    this._transformModeLayerIndex = layerIndex;
+    if (this._transformOverlayCanvas) {
+      this._transformOverlayCanvas.style.pointerEvents = 'auto';
+    }
+    this._attachTransformHandlers();
+    this._drawTransformOverlay();
+
+    if (this._transformBtn) this._transformBtn.classList.add('active');
+  }
+
+  /** Deactivate transform mode (clears overlay, restores cursor). */
+  _deactivateTransformMode() {
+    this._transformModeLayerIndex = -1;
+    this._transformDragState = null;
+    if (this._transformOverlayCanvas) {
+      this._transformOverlayCanvas.style.pointerEvents = 'none';
+      this._transformOverlayCanvas.style.cursor = '';
+      const ctx = this._transformOverlayCanvas.getContext('2d');
+      ctx.clearRect(0, 0, this._transformOverlayCanvas.width, this._transformOverlayCanvas.height);
+    }
+    this._detachTransformHandlers();
+    if (this._transformBtn) this._transformBtn.classList.remove('active');
+  }
+
+  /** Return bounding-box geometry in overlay pixels for the given layer. */
+  _getTransformBBox(layer, ow, oh) {
+    const t = layer.transform || { x: 0, y: 0, scaleX: 1, scaleY: 1 };
+    const cx = (0.5 + t.x) * ow;
+    const cy = (0.5 + t.y) * oh;
+    const hw = 0.5 * ow * Math.abs(t.scaleX);
+    const hh = 0.5 * oh * Math.abs(t.scaleY);
+    return { cx, cy, hw, hh, x1: cx - hw, y1: cy - hh, x2: cx + hw, y2: cy + hh };
+  }
+
+  /**
+   * Return the 8 handle descriptors (id, x, y, cursor) in overlay pixels.
+   * Handles: 4 corners (nw/ne/sw/se) + 4 edge mid-points (n/s/w/e).
+   */
+  _getTransformHandles(layer, ow, oh) {
+    const { cx, cy, hw, hh } = this._getTransformBBox(layer, ow, oh);
+    return [
+      { id: 'nw', x: cx - hw, y: cy - hh, cursor: 'nw-resize' },
+      { id: 'n',  x: cx,      y: cy - hh, cursor: 'n-resize'  },
+      { id: 'ne', x: cx + hw, y: cy - hh, cursor: 'ne-resize' },
+      { id: 'w',  x: cx - hw, y: cy,      cursor: 'w-resize'  },
+      { id: 'e',  x: cx + hw, y: cy,      cursor: 'e-resize'  },
+      { id: 'sw', x: cx - hw, y: cy + hh, cursor: 'sw-resize' },
+      { id: 's',  x: cx,      y: cy + hh, cursor: 's-resize'  },
+      { id: 'se', x: cx + hw, y: cy + hh, cursor: 'se-resize' },
+    ];
+  }
+
+  /**
+   * Hit-test mouse position against handles and bounding box interior.
+   * Returns a handle descriptor {id, cursor} or null if outside.
+   */
+  _hitTestTransformHandle(mx, my, layer, ow, oh) {
+    const HANDLE_R = 7; // px hit radius (slightly larger than drawn radius for ease of use)
+    const handles = this._getTransformHandles(layer, ow, oh);
+    for (const h of handles) {
+      const dx = mx - h.x, dy = my - h.y;
+      if (dx * dx + dy * dy <= HANDLE_R * HANDLE_R) return h;
+    }
+    const { x1, y1, x2, y2 } = this._getTransformBBox(layer, ow, oh);
+    if (mx >= x1 && mx <= x2 && my >= y1 && my <= y2) {
+      return { id: 'move', cursor: 'move' };
+    }
+    return null;
+  }
+
+  /** Render the bounding box, handles, and scale label on the overlay canvas. */
+  _drawTransformOverlay() {
+    const oc = this._transformOverlayCanvas;
+    if (!oc) return;
+    const ctx = oc.getContext('2d');
+    const ow = oc.width, oh = oc.height;
+    ctx.clearRect(0, 0, ow, oh);
+
+    const idx = this._transformModeLayerIndex;
+    if (idx < 0 || idx >= this.layers.length) return;
+    const layer = this.layers[idx];
+    const { cx, cy, hw, hh } = this._getTransformBBox(layer, ow, oh);
+
+    // --- Bounding rectangle ---
+    ctx.save();
+    ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([5, 4]);
+    ctx.shadowColor = 'rgba(0,0,0,0.6)';
+    ctx.shadowBlur = 3;
+    ctx.strokeRect(cx - hw, cy - hh, hw * 2, hh * 2);
+    ctx.setLineDash([]);
+    ctx.shadowBlur = 0;
+    ctx.restore();
+
+    // --- Centre crosshair ---
+    ctx.save();
+    ctx.strokeStyle = 'rgba(255,255,255,0.45)';
+    ctx.lineWidth = 1;
+    const ARM = 9;
+    ctx.beginPath();
+    ctx.moveTo(cx - ARM, cy); ctx.lineTo(cx + ARM, cy);
+    ctx.moveTo(cx, cy - ARM); ctx.lineTo(cx, cy + ARM);
+    ctx.stroke();
+    ctx.restore();
+
+    // --- Handles ---
+    const handles = this._getTransformHandles(layer, ow, oh);
+    for (const h of handles) {
+      ctx.beginPath();
+      ctx.arc(h.x, h.y, 5, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(255,255,255,0.92)';
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(0,0,0,0.5)';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    }
+
+    // --- Scale / position label ---
+    const t = layer.transform || { x: 0, y: 0, scaleX: 1, scaleY: 1 };
+    const label = this._transformDragState
+      ? `${(t.scaleX * 100).toFixed(0)}% × ${(t.scaleY * 100).toFixed(0)}%`
+      : `⊞ ${(t.scaleX * 100).toFixed(0)}%×${(t.scaleY * 100).toFixed(0)}%`;
+    ctx.font = 'bold 10px monospace';
+    const tw = ctx.measureText(label).width;
+    const lx = Math.max(2, Math.min(ow - tw - 6, cx - tw / 2));
+    // Place below box, but clamp to canvas edges
+    const rawLy = cy + hh + 14;
+    const ly = rawLy > oh - 4 ? cy - hh - 6 : rawLy;
+
+    // Background pill
+    ctx.fillStyle = 'rgba(0,0,0,0.65)';
+    if (ctx.roundRect) {
+      ctx.beginPath();
+      ctx.roundRect(lx - 3, ly - 11, tw + 6, 14, 3);
+      ctx.fill();
+    } else {
+      ctx.fillRect(lx - 3, ly - 11, tw + 6, 14);
+    }
+    ctx.fillStyle = '#fff';
+    ctx.fillText(label, lx, ly);
+
+    // --- Hint text when not dragging ---
+    if (!this._transformDragState) {
+      ctx.font = '9px monospace';
+      ctx.fillStyle = 'rgba(255,255,255,0.45)';
+      const hint = 'drag inside = move · drag handle = scale · shift = 1:1 · Esc = exit';
+      ctx.fillText(hint, Math.max(2, cx - ctx.measureText(hint).width / 2), Math.min(oh - 4, cy + hh + 28));
+    }
+  }
+
+  /** Attach mouse event handlers to the overlay canvas. */
+  _attachTransformHandlers() {
+    this._detachTransformHandlers();
+    const oc = this._transformOverlayCanvas;
+    if (!oc) return;
+
+    const onDown  = (e) => this._onTransformMouseDown(e);
+    const onMove  = (e) => this._onTransformMouseMove(e);
+    const onUp    = (e) => this._onTransformMouseUp(e);
+    const onLeave = ()  => {
+      if (!this._transformDragState && oc) oc.style.cursor = 'default';
+    };
+    const onKey = (e) => {
+      if (e.key === 'Escape') {
+        this._deactivateTransformMode();
+        this._rebuildLayerKnobs(); // re-render toolbar so button loses active state
+      }
+    };
+
+    oc.addEventListener('mousedown', onDown);
+    oc.addEventListener('mousemove', onMove);
+    oc.addEventListener('mouseup', onUp);
+    oc.addEventListener('mouseleave', onLeave);
+    window.addEventListener('mouseup', onUp);    // catch release outside overlay
+    window.addEventListener('keydown', onKey);
+
+    this._transformOverlayHandlers = { oc, onDown, onMove, onUp, onLeave, onKey };
+  }
+
+  /** Detach mouse event handlers. */
+  _detachTransformHandlers() {
+    const h = this._transformOverlayHandlers;
+    if (!h) return;
+    h.oc.removeEventListener('mousedown', h.onDown);
+    h.oc.removeEventListener('mousemove', h.onMove);
+    h.oc.removeEventListener('mouseup',   h.onUp);
+    h.oc.removeEventListener('mouseleave', h.onLeave);
+    window.removeEventListener('mouseup',  h.onUp);
+    window.removeEventListener('keydown',  h.onKey);
+    this._transformOverlayHandlers = null;
+  }
+
+  _onTransformMouseDown(e) {
+    if (e.button !== 0) return;
+    const oc = this._transformOverlayCanvas;
+    const idx = this._transformModeLayerIndex;
+    if (idx < 0 || !oc) return;
+    const layer = this.layers[idx];
+    if (!layer) return;
+
+    const mx = e.offsetX, my = e.offsetY;
+    const ow = oc.width, oh = oc.height;
+    const hit = this._hitTestTransformHandle(mx, my, layer, ow, oh);
+    if (!hit) return;
+
+    e.preventDefault();
+    const t = layer.transform || { x: 0, y: 0, scaleX: 1, scaleY: 1 };
+    const bbox = this._getTransformBBox(layer, ow, oh);
+
+    this._transformDragState = {
+      handle: hit.id,
+      startMx: mx,
+      startMy: my,
+      startTransform: { ...t },
+      bbox,   // {cx, cy, hw, hh, x1, y1, x2, y2} snapshot at drag start
+      ow, oh,
+    };
+  }
+
+  _onTransformMouseMove(e) {
+    const oc = this._transformOverlayCanvas;
+    const idx = this._transformModeLayerIndex;
+    if (idx < 0 || !oc) return;
+    const layer = this.layers[idx];
+    if (!layer) return;
+
+    const mx = e.offsetX, my = e.offsetY;
+    const ow = oc.width, oh = oc.height;
+
+    if (!this._transformDragState) {
+      // Hover — update cursor
+      const hit = this._hitTestTransformHandle(mx, my, layer, ow, oh);
+      oc.style.cursor = hit ? hit.cursor : 'default';
+      return;
+    }
+
+    e.preventDefault();
+    const drag = this._transformDragState;
+    const dx = mx - drag.startMx;
+    const dy = my - drag.startMy;
+    const { startTransform: st, bbox, ow: dow, oh: doh } = drag;
+    const { x1, y1, x2, y2 } = bbox;
+
+    if (!layer.transform) layer.transform = { x: 0, y: 0, scaleX: 1, scaleY: 1 };
+
+    if (drag.handle === 'move') {
+      // Pan: shift the layer centre by the drag delta
+      layer.transform.x = st.x + dx / dow;
+      layer.transform.y = st.y + dy / doh;
+    } else {
+      // Resize: update the relevant edges of the bounding box
+      let nx1 = x1, ny1 = y1, nx2 = x2, ny2 = y2;
+      const h = drag.handle;
+
+      if (h.includes('n')) ny1 = y1 + dy;
+      if (h.includes('s')) ny2 = y2 + dy;
+      if (h.includes('w')) nx1 = x1 + dx;
+      if (h.includes('e')) nx2 = x2 + dx;
+
+      // Shift key + corner handle → lock aspect ratio
+      if (e.shiftKey && h.length === 2) {
+        const origAR = (x2 - x1) / Math.max(1, y2 - y1);
+        // Project the drag delta onto the handle's diagonal direction
+        const diagX = h.includes('e') ? 1 : -1;
+        const diagY = h.includes('s') ? 1 : -1;
+        const len = Math.hypot(diagX, diagY);
+        const proj = (dx * diagX + dy * diagY) / len;
+        const px = (proj * diagX) / len;
+        const py = (proj * diagY) / len;
+        if (h.includes('e')) nx2 = x2 + px; else nx1 = x1 + px;
+        if (h.includes('s')) ny2 = y2 + py; else ny1 = y1 + py;
+      }
+
+      // Enforce minimum size (20 display px)
+      const MIN = 20;
+      if (nx2 - nx1 < MIN) {
+        if (h.includes('w')) nx1 = nx2 - MIN; else nx2 = nx1 + MIN;
+      }
+      if (ny2 - ny1 < MIN) {
+        if (h.includes('n')) ny1 = ny2 - MIN; else ny2 = ny1 + MIN;
+      }
+
+      const newW  = nx2 - nx1;
+      const newH  = ny2 - ny1;
+      const newCx = (nx1 + nx2) / 2;
+      const newCy = (ny1 + ny2) / 2;
+
+      layer.transform.scaleX = newW / dow;
+      layer.transform.scaleY = newH / doh;
+      layer.transform.x      = (newCx - dow / 2) / dow;
+      layer.transform.y      = (newCy - doh / 2) / doh;
+    }
+
+    this._drawTransformOverlay();
+  }
+
+  _onTransformMouseUp(e) {
+    if (!this._transformDragState) return;
+    this._transformDragState = null;
+    this._drawTransformOverlay();
+    this._pushHistory();
   }
 }

@@ -2132,6 +2132,19 @@ html, body {
   cursor: default;
 }
 
+/* Transform button active state */
+.param-tool-btn.ll-transform-btn.active {
+  background: #e8f0fc !important;
+  border-top-color: #a0b8d8 !important;
+  border-left-color: #a0b8d8 !important;
+  border-right-color: #6a90b8 !important;
+  border-bottom-color: #6a90b8 !important;
+  color: #1a3a5c !important;
+}
+.param-tool-btn.ll-transform-btn.active:hover {
+  background: #d4e4f8 !important;
+}
+
 .ll-image-row {
   display: flex;
   align-items: center;
