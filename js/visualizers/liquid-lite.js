@@ -368,8 +368,11 @@ export class LiquidLiteVisualizer {
       this._rightStack.style.right = `${Math.max(insets.right, 12) + 8}px`;
     }
     if (this._bottomBar) {
-      this._bottomBar.style.paddingLeft = `${Math.max(insets.left, 12) + 16}px`;
-      this._bottomBar.style.paddingRight = `${Math.max(insets.right, 12) + 16}px`;
+      // Keep horizontal padding tight so all 5 buttons + preset selector fit
+      // on narrow iPhones (375px) without squeezing. Safe-area insets still
+      // respected (notch/home indicator); we just reduce the extra aesthetic gap.
+      this._bottomBar.style.paddingLeft = `${Math.max(insets.left, 8) + 8}px`;
+      this._bottomBar.style.paddingRight = `${Math.max(insets.right, 8) + 8}px`;
       this._bottomBar.style.paddingBottom = `${Math.max(insets.bottom, 8) + 8}px`;
     }
 

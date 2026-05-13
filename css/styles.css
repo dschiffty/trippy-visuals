@@ -1331,6 +1331,38 @@ html, body {
   gap: 6px;
 }
 
+/* ---- Bottom bar: fixed-size circular buttons that never squeeze ---- */
+/* Overrides the base .cam-fbtn (44px) to 40px so all 5 buttons + preset
+   selector fit comfortably in portrait mode on the narrowest iPhones (375px).
+   flex-shrink: 0 + explicit width/height guarantees perfect circles. */
+.cam-bottom-bar .cam-fbtn {
+  width: 40px;
+  height: 40px;
+  min-width: 40px;
+  min-height: 40px;
+  flex-shrink: 0;
+  font-size: 18px;
+}
+/* Nav arrow buttons stay readable at the same size */
+.cam-bottom-bar .cam-fbtn.cam-nav-btn {
+  font-size: 20px;
+}
+/* Hide the "Saved Presets" label in the bottom bar — just show the select,
+   reclaiming ~70px so the layout fits without overflow or squeezing. */
+.cam-bottom-bar .cam-preset-wrap label {
+  display: none !important;
+}
+/* Constrain preset selector width in bottom bar so 5 buttons + select all fit
+   on the narrowest iPhones (375px) with comfortable gaps between items. */
+.cam-bottom-bar .cam-preset-wrap {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+.cam-bottom-bar .cam-preset-wrap select {
+  max-width: 90px !important;
+  min-width: 60px;
+}
+
 /* CSS media query fallback (in case JS hasn't run yet) */
 @media (orientation: landscape) and (max-height: 500px) {
   .cam-float-left {
