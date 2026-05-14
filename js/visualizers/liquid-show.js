@@ -407,6 +407,11 @@ export class LiquidShowVisualizer {
       this._exitMaskEditMode();
     }
 
+    // Stop any live webcam streams on the current layers before we discard them.
+    // Each layer owns its stream independently; stop them here to release camera
+    // resources and turn off the camera LED rather than leaking them to GC.
+    this._stopAllWebcamLayers();
+
     // Restore layers
     if (state.layers && Array.isArray(state.layers)) {
       this.layers = state.layers.map(saved => {
@@ -3909,13 +3914,32 @@ export class LiquidShowVisualizer {
       if (this._globalLock) return;
       if (this.layers.length >= 6) return;
       const src = this.layers[this.selectedLayerIndex];
+      const srcWasLive = src.type === 'webcam' && src._webcamStatus === 'active';
       const copy = JSON.parse(JSON.stringify(src));
       copy.offset = { x: Math.random() * 1000, y: Math.random() * 1000 };
+      // Webcam: JSON copy inherits serialised string state (_webcamStatus, etc.)
+      // but non-serialisable stream/video references are silently dropped.
+      // Explicitly reset every runtime webcam property so the duplicate starts
+      // clean, then auto-start a fresh independent stream if the source was live.
+      if (copy.type === 'webcam') {
+        copy._webcamStatus       = 'idle';
+        copy._webcamStream       = null;
+        copy._webcamVideo        = null;
+        copy._webcamCapabilities = null;
+        copy._wcamHWSupport      = null;
+        copy._wcamTmp            = null;
+        copy._webcamStatusEl     = null;
+        copy._webcamConnectBtn   = null;
+        copy._webcamDeviceSelect = null;
+      }
       this.layers.splice(this.selectedLayerIndex + 1, 0, copy);
       this.selectedLayerIndex++;
       this.selectedLayerIndices = new Set([this.selectedLayerIndex]);
       this._rebuildLayerList();
       this._rebuildLayerKnobs();
+      // Start a fresh independent camera stream for the duplicate if the
+      // source layer was live — each layer always gets its own getUserMedia call.
+      if (srcWasLive) this._startWebcam(copy, copy._webcamDeviceId || null);
       this._pushHistory();
     });
 
@@ -4167,6 +4191,17 @@ export class LiquidShowVisualizer {
       this._exitMaskEditMode();
     }
 
+    // Release camera resources for any live webcam layers being replaced.
+    // Skip UI refresh — the elements are about to be rebuilt anyway.
+    this.layers.forEach(l => {
+      if (l.type === 'webcam' && l._webcamStream) {
+        if (l._webcamVideo) { l._webcamVideo.pause(); l._webcamVideo.srcObject = null; }
+        l._webcamStream.getTracks().forEach(t => t.stop());
+        l._webcamStream = null;
+        l._webcamVideo  = null;
+      }
+    });
+
     this.layers = state.layers.map(saved => {
       const layer = this._createLayer(saved.type, {
         ...saved.params, blendMode: saved.blendMode,
@@ -4367,6 +4402,21 @@ export class LiquidShowVisualizer {
         layer._lightLastBeatTime = undefined;
         this._rebuildLayerList();
         this._rebuildLayerKnobs();
+        // Auto-start webcam if switching to webcam and camera permission is
+        // already granted — mirrors the buildPanel auto-reconnect behaviour so
+        // adding a second webcam layer starts immediately without a manual click.
+        if (layer.type === 'webcam') {
+          (async () => {
+            try {
+              const perm = await navigator.permissions?.query({ name: 'camera' });
+              if (perm?.state === 'granted') {
+                const savedDevice = layer._webcamDeviceId
+                  || (() => { try { return localStorage.getItem('ll-webcam-deviceId'); } catch (_) { return null; } })();
+                this._startWebcam(layer, savedDevice);
+              }
+            } catch (_) { /* permissions API not supported — user must click Connect manually */ }
+          })();
+        }
         this._pushHistory();
       });
       typeSelect.addEventListener('click', (e) => e.stopPropagation());
