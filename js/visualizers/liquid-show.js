@@ -82,6 +82,9 @@ const LAYER_TYPES = ['wash', 'blob', 'marbling', 'bubble', 'image', 'scope', 'pu
 const LAYER_TYPE_LABELS = { wash: 'Wash', blob: 'Blob', marbling: 'Marbling', bubble: 'Bubble', image: 'Image', scope: 'Scope', pulse: 'Pulse', lissajous: 'Lissajous', stars: 'Stars', lightning: 'Lightning', webcam: 'Webcam', blank: 'Blank' };
 // Layer types that support the canvas-level spin rotation controls
 const SPIN_LAYER_TYPES = new Set(['wash', 'bubble', 'pulse', 'image', 'lissajous', 'webcam']);
+// Layer types with bounded content (image / webcam) get the full bounding-box
+// resize transform.  All other (generative) types use a seamless tiled pan.
+const CONTENT_LAYER_TYPES = new Set(['image', 'webcam']);
 const BLEND_MODES = [
   { value: 'source-over', label: 'Normal' },
   { value: 'lighter', label: 'Add' },
@@ -3540,20 +3543,41 @@ export class LiquidShowVisualizer {
       // --- Pan/Transform: pre-apply to a temp canvas so masks work correctly ---
       let srcCanvas = this.layerCanvases[i];
       const t = layer.transform;
-      if (t && (t.x !== 0 || t.y !== 0 || t.scaleX !== 1 || t.scaleY !== 1)) {
+      const _isContentLayer = CONTENT_LAYER_TYPES.has(layer.type);
+      // For content layers (image/webcam): full affine transform (may show hard
+      // edges for large offsets, which is expected for bounded content).
+      // For generative layers: tiled 3×3 wrap so the shift is seamless — the
+      // layer canvas is tiled in all directions and the viewport is shifted.
+      // Scale is honoured for content layers only; generative layers always fill
+      // the full canvas so scaleX/Y is kept at 1.
+      const _needsTransform = t && (_isContentLayer
+        ? (t.x !== 0 || t.y !== 0 || t.scaleX !== 1 || t.scaleY !== 1)
+        : (t.x !== 0 || t.y !== 0));
+      if (_needsTransform) {
         if (!this._transformTmpCanvas) this._transformTmpCanvas = document.createElement('canvas');
         const ttc = this._transformTmpCanvas;
         if (ttc.width !== w || ttc.height !== h) { ttc.width = w; ttc.height = h; }
         const ttCtx = ttc.getContext('2d');
         ttCtx.clearRect(0, 0, w, h);
-        ttCtx.save();
         ttCtx.imageSmoothingEnabled = true;
         ttCtx.imageSmoothingQuality = 'high';
-        ttCtx.translate(w / 2 + t.x * w, h / 2 + t.y * h);
-        ttCtx.scale(t.scaleX, t.scaleY);
-        ttCtx.translate(-w / 2, -h / 2);
-        ttCtx.drawImage(this.layerCanvases[i], 0, 0, w, h);
-        ttCtx.restore();
+        if (_isContentLayer) {
+          ttCtx.save();
+          ttCtx.translate(w / 2 + t.x * w, h / 2 + t.y * h);
+          ttCtx.scale(t.scaleX, t.scaleY);
+          ttCtx.translate(-w / 2, -h / 2);
+          ttCtx.drawImage(this.layerCanvases[i], 0, 0, w, h);
+          ttCtx.restore();
+        } else {
+          // Tiled wrap: draw a 3×3 mosaic offset by (dx, dy) so any shift within
+          // ±one canvas length is fully covered with no gaps.
+          const dx = t.x * w, dy = t.y * h;
+          for (let tx = -1; tx <= 1; tx++) {
+            for (let ty = -1; ty <= 1; ty++) {
+              ttCtx.drawImage(this.layerCanvases[i], tx * w + dx, ty * h + dy, w, h);
+            }
+          }
+        }
         srcCanvas = ttc;
       }
 
@@ -5693,6 +5717,29 @@ export class LiquidShowVisualizer {
         maskRow.appendChild(clearBtn);
       }
 
+      // Transform button — sits on the same line as the Mask button
+      if (layer.type !== 'blank') {
+        const isXformActive = this._transformModeLayerIndex === this.selectedLayerIndex;
+        const isContent = CONTENT_LAYER_TYPES.has(layer.type);
+        const transformBtn = document.createElement('button');
+        transformBtn.className = 'll-toggle ll-transform-btn' + (isXformActive ? ' active' : '');
+        transformBtn.innerHTML = '⊞ Transform';
+        transformBtn.title = isContent
+          ? 'Drag to reposition and resize this layer. Drag corner handles to scale. Shift+corner = lock aspect ratio. Esc to exit.'
+          : 'Drag anywhere to pan the pattern center point. Esc to exit.';
+        transformBtn.style.cssText = 'padding:4px 8px;font-size:10px;flex-shrink:0;white-space:nowrap;';
+        transformBtn.addEventListener('click', () => {
+          if (this._isLayerLocked(this.selectedLayerIndex)) return;
+          if (this._transformModeLayerIndex === this.selectedLayerIndex) {
+            this._deactivateTransformMode();
+          } else {
+            this._activateTransformMode(this.selectedLayerIndex);
+          }
+        });
+        this._transformBtn = transformBtn;
+        maskRow.appendChild(transformBtn);
+      }
+
       container.appendChild(maskRow);
     }
 
@@ -5853,25 +5900,6 @@ export class LiquidShowVisualizer {
     toolbar.appendChild(dynamicBtn);
     toolbar.appendChild(lockAllBtn);
     toolbar.appendChild(resetBtn);
-
-    // Transform button — toggle pan/resize mode for the selected layer
-    if (!isMulti && layer && layer.type !== 'blank') {
-      const isXformActive = this._transformModeLayerIndex === this.selectedLayerIndex;
-      const transformBtn = document.createElement('button');
-      transformBtn.className = 'param-tool-btn ll-transform-btn' + (isXformActive ? ' active' : '');
-      transformBtn.innerHTML = '⊞ Transform';
-      transformBtn.title = 'Drag to reposition and resize this layer. Drag corner handles to scale. Shift+corner = lock aspect ratio. Esc to exit.';
-      transformBtn.addEventListener('click', () => {
-        if (this._isLayerLocked(this.selectedLayerIndex)) return;
-        if (this._transformModeLayerIndex === this.selectedLayerIndex) {
-          this._deactivateTransformMode();
-        } else {
-          this._activateTransformMode(this.selectedLayerIndex);
-        }
-      });
-      this._transformBtn = transformBtn;
-      toolbar.appendChild(transformBtn);
-    }
 
     // Snapshot button — visible in both main window and the detached popout
     {
@@ -6529,10 +6557,19 @@ export class LiquidShowVisualizer {
   /** Create the transparent overlay canvas that shows bounding box + handles. */
   _setupTransformOverlay() {
     this._removeTransformOverlay();
-    const container = this.canvas.parentElement; // .canvas-container
+
+    // In popout mode the actual rendering canvas (and user-facing view) lives in
+    // the opener window.  Route the overlay there so it appears over real content
+    // and so mouse/keyboard events fire in the correct document context.
+    const isPopout = !!(this._app?.isPopout && window.opener?.__app);
+    const hostWin    = isPopout ? window.opener          : window;
+    const hostCanvas = isPopout ? window.opener.__app.canvas : this.canvas;
+    const container  = hostCanvas?.parentElement; // .canvas-container
     if (!container) return;
 
-    const oc = document.createElement('canvas');
+    this._transformHostWindow = hostWin; // stored for event attachment / detachment
+
+    const oc = hostWin.document.createElement('canvas');
     oc.style.cssText = [
       'position:absolute;top:0;left:0;width:100%;height:100%;',
       'pointer-events:none;z-index:10;',
@@ -6572,6 +6609,15 @@ export class LiquidShowVisualizer {
     if (this._maskEditingLayerIndex >= 0) this._exitMaskEditMode();
 
     this._transformModeLayerIndex = layerIndex;
+
+    // Generative layers use pan-only mode — lock scale to 1:1 so any old scale
+    // value (set before this distinction was enforced) doesn't clip the layer.
+    const layer = this.layers[layerIndex];
+    if (layer && !CONTENT_LAYER_TYPES.has(layer.type) && layer.transform) {
+      layer.transform.scaleX = 1;
+      layer.transform.scaleY = 1;
+    }
+
     if (this._transformOverlayCanvas) {
       this._transformOverlayCanvas.style.pointerEvents = 'auto';
     }
@@ -6608,8 +6654,10 @@ export class LiquidShowVisualizer {
   /**
    * Return the 8 handle descriptors (id, x, y, cursor) in overlay pixels.
    * Handles: 4 corners (nw/ne/sw/se) + 4 edge mid-points (n/s/w/e).
+   * Generative layers have no resize handles — they always fill the canvas.
    */
   _getTransformHandles(layer, ow, oh) {
+    if (!CONTENT_LAYER_TYPES.has(layer.type)) return [];
     const { cx, cy, hw, hh } = this._getTransformBBox(layer, ow, oh);
     return [
       { id: 'nw', x: cx - hw, y: cy - hh, cursor: 'nw-resize' },
@@ -6626,13 +6674,22 @@ export class LiquidShowVisualizer {
   /**
    * Hit-test mouse position against handles and bounding box interior.
    * Returns a handle descriptor {id, cursor} or null if outside.
+   * For generative layers the whole canvas is the drag target (pan only).
    */
   _hitTestTransformHandle(mx, my, layer, ow, oh) {
-    const HANDLE_R = 7; // px hit radius (slightly larger than drawn radius for ease of use)
+    const HANDLE_R = 7; // px hit radius (slightly larger than drawn radius)
     const handles = this._getTransformHandles(layer, ow, oh);
     for (const h of handles) {
       const dx = mx - h.x, dy = my - h.y;
       if (dx * dx + dy * dy <= HANDLE_R * HANDLE_R) return h;
+    }
+    // Generative layers: the pattern always fills the full canvas, so the whole
+    // overlay surface is a valid pan target.
+    if (!CONTENT_LAYER_TYPES.has(layer.type)) {
+      if (mx >= 0 && mx <= ow && my >= 0 && my <= oh) {
+        return { id: 'move', cursor: 'move' };
+      }
+      return null;
     }
     const { x1, y1, x2, y2 } = this._getTransformBBox(layer, ow, oh);
     if (mx >= x1 && mx <= x2 && my >= y1 && my <= y2) {
@@ -6641,7 +6698,8 @@ export class LiquidShowVisualizer {
     return null;
   }
 
-  /** Render the bounding box, handles, and scale label on the overlay canvas. */
+  /** Render the bounding box/handles (content layers) or center-point indicator
+   *  (generative layers) on the overlay canvas. */
   _drawTransformOverlay() {
     const oc = this._transformOverlayCanvas;
     if (!oc) return;
@@ -6653,72 +6711,137 @@ export class LiquidShowVisualizer {
     if (idx < 0 || idx >= this.layers.length) return;
     const layer = this.layers[idx];
     const { cx, cy, hw, hh } = this._getTransformBBox(layer, ow, oh);
-
-    // --- Bounding rectangle ---
-    ctx.save();
-    ctx.strokeStyle = 'rgba(255,255,255,0.9)';
-    ctx.lineWidth = 1.5;
-    ctx.setLineDash([5, 4]);
-    ctx.shadowColor = 'rgba(0,0,0,0.6)';
-    ctx.shadowBlur = 3;
-    ctx.strokeRect(cx - hw, cy - hh, hw * 2, hh * 2);
-    ctx.setLineDash([]);
-    ctx.shadowBlur = 0;
-    ctx.restore();
-
-    // --- Centre crosshair ---
-    ctx.save();
-    ctx.strokeStyle = 'rgba(255,255,255,0.45)';
-    ctx.lineWidth = 1;
-    const ARM = 9;
-    ctx.beginPath();
-    ctx.moveTo(cx - ARM, cy); ctx.lineTo(cx + ARM, cy);
-    ctx.moveTo(cx, cy - ARM); ctx.lineTo(cx, cy + ARM);
-    ctx.stroke();
-    ctx.restore();
-
-    // --- Handles ---
-    const handles = this._getTransformHandles(layer, ow, oh);
-    for (const h of handles) {
-      ctx.beginPath();
-      ctx.arc(h.x, h.y, 5, 0, Math.PI * 2);
-      ctx.fillStyle = 'rgba(255,255,255,0.92)';
-      ctx.fill();
-      ctx.strokeStyle = 'rgba(0,0,0,0.5)';
-      ctx.lineWidth = 1;
-      ctx.stroke();
-    }
-
-    // --- Scale / position label ---
     const t = layer.transform || { x: 0, y: 0, scaleX: 1, scaleY: 1 };
-    const label = this._transformDragState
-      ? `${(t.scaleX * 100).toFixed(0)}% × ${(t.scaleY * 100).toFixed(0)}%`
-      : `⊞ ${(t.scaleX * 100).toFixed(0)}%×${(t.scaleY * 100).toFixed(0)}%`;
-    ctx.font = 'bold 10px monospace';
-    const tw = ctx.measureText(label).width;
-    const lx = Math.max(2, Math.min(ow - tw - 6, cx - tw / 2));
-    // Place below box, but clamp to canvas edges
-    const rawLy = cy + hh + 14;
-    const ly = rawLy > oh - 4 ? cy - hh - 6 : rawLy;
+    const isContent = CONTENT_LAYER_TYPES.has(layer.type);
 
-    // Background pill
-    ctx.fillStyle = 'rgba(0,0,0,0.65)';
-    if (ctx.roundRect) {
+    if (isContent) {
+      // ── Content layers: full bounding box + 8 resize handles ──────────────
+
+      // Bounding rectangle
+      ctx.save();
+      ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([5, 4]);
+      ctx.shadowColor = 'rgba(0,0,0,0.6)';
+      ctx.shadowBlur = 3;
+      ctx.strokeRect(cx - hw, cy - hh, hw * 2, hh * 2);
+      ctx.setLineDash([]);
+      ctx.shadowBlur = 0;
+      ctx.restore();
+
+      // Centre crosshair
+      ctx.save();
+      ctx.strokeStyle = 'rgba(255,255,255,0.45)';
+      ctx.lineWidth = 1;
+      const ARM = 9;
       ctx.beginPath();
-      ctx.roundRect(lx - 3, ly - 11, tw + 6, 14, 3);
-      ctx.fill();
-    } else {
-      ctx.fillRect(lx - 3, ly - 11, tw + 6, 14);
-    }
-    ctx.fillStyle = '#fff';
-    ctx.fillText(label, lx, ly);
+      ctx.moveTo(cx - ARM, cy); ctx.lineTo(cx + ARM, cy);
+      ctx.moveTo(cx, cy - ARM); ctx.lineTo(cx, cy + ARM);
+      ctx.stroke();
+      ctx.restore();
 
-    // --- Hint text when not dragging ---
-    if (!this._transformDragState) {
-      ctx.font = '9px monospace';
-      ctx.fillStyle = 'rgba(255,255,255,0.45)';
-      const hint = 'drag inside = move · drag handle = scale · shift = 1:1 · Esc = exit';
-      ctx.fillText(hint, Math.max(2, cx - ctx.measureText(hint).width / 2), Math.min(oh - 4, cy + hh + 28));
+      // Handles
+      const handles = this._getTransformHandles(layer, ow, oh);
+      for (const h of handles) {
+        ctx.beginPath();
+        ctx.arc(h.x, h.y, 5, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(255,255,255,0.92)';
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(0,0,0,0.5)';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      }
+
+      // Scale label
+      const label = this._transformDragState
+        ? `${(t.scaleX * 100).toFixed(0)}% × ${(t.scaleY * 100).toFixed(0)}%`
+        : `⊞ ${(t.scaleX * 100).toFixed(0)}%×${(t.scaleY * 100).toFixed(0)}%`;
+      ctx.font = 'bold 10px monospace';
+      const tw = ctx.measureText(label).width;
+      const lx = Math.max(2, Math.min(ow - tw - 6, cx - tw / 2));
+      const rawLy = cy + hh + 14;
+      const ly = rawLy > oh - 4 ? cy - hh - 6 : rawLy;
+      ctx.fillStyle = 'rgba(0,0,0,0.65)';
+      if (ctx.roundRect) {
+        ctx.beginPath(); ctx.roundRect(lx - 3, ly - 11, tw + 6, 14, 3); ctx.fill();
+      } else { ctx.fillRect(lx - 3, ly - 11, tw + 6, 14); }
+      ctx.fillStyle = '#fff';
+      ctx.fillText(label, lx, ly);
+
+      // Hint
+      if (!this._transformDragState) {
+        ctx.font = '9px monospace';
+        ctx.fillStyle = 'rgba(255,255,255,0.45)';
+        const hint = 'drag inside = move · drag handle = scale · shift = 1:1 · Esc = exit';
+        ctx.fillText(hint, Math.max(2, cx - ctx.measureText(hint).width / 2),
+                     Math.min(oh - 4, cy + hh + 28));
+      }
+
+    } else {
+      // ── Generative layers: center-point indicator only ──────────────────
+      // The pattern fills the full canvas; the crosshair shows the pan origin.
+
+      // Subtle canvas border to indicate the mode is active
+      ctx.save();
+      ctx.strokeStyle = 'rgba(255,255,255,0.18)';
+      ctx.lineWidth = 1;
+      ctx.setLineDash([6, 5]);
+      ctx.strokeRect(1, 1, ow - 2, oh - 2);
+      ctx.setLineDash([]);
+      ctx.restore();
+
+      // Center-point target: ring + crosshair arms
+      const RING_R = 14, ARM = 24;
+      ctx.save();
+      ctx.strokeStyle = 'rgba(255,255,255,0.88)';
+      ctx.lineWidth = 1.5;
+      ctx.shadowColor = 'rgba(0,0,0,0.7)';
+      ctx.shadowBlur = 4;
+      // Crosshair arms (with gap around ring)
+      ctx.beginPath();
+      ctx.moveTo(cx - ARM, cy); ctx.lineTo(cx - RING_R - 2, cy);
+      ctx.moveTo(cx + RING_R + 2, cy); ctx.lineTo(cx + ARM, cy);
+      ctx.moveTo(cx, cy - ARM); ctx.lineTo(cx, cy - RING_R - 2);
+      ctx.moveTo(cx, cy + RING_R + 2); ctx.lineTo(cx, cy + ARM);
+      ctx.stroke();
+      // Ring
+      ctx.beginPath();
+      ctx.arc(cx, cy, RING_R, 0, Math.PI * 2);
+      ctx.stroke();
+      // Center dot
+      ctx.fillStyle = 'rgba(255,255,255,0.88)';
+      ctx.shadowBlur = 0;
+      ctx.beginPath();
+      ctx.arc(cx, cy, 2.5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+
+      // Pan label
+      const xPct = (t.x * 100).toFixed(0);
+      const yPct = (t.y * 100).toFixed(0);
+      const label = this._transformDragState
+        ? `⊙ ${xPct >= 0 ? '+' : ''}${xPct}% ${yPct >= 0 ? '+' : ''}${yPct}%`
+        : `⊙ Pan center`;
+      ctx.font = 'bold 10px monospace';
+      const tw = ctx.measureText(label).width;
+      const lx = Math.max(2, Math.min(ow - tw - 6, cx - tw / 2));
+      const rawLy = cy + RING_R + 18;
+      const ly = rawLy > oh - 4 ? cy - RING_R - 6 : rawLy;
+      ctx.fillStyle = 'rgba(0,0,0,0.65)';
+      if (ctx.roundRect) {
+        ctx.beginPath(); ctx.roundRect(lx - 3, ly - 11, tw + 6, 14, 3); ctx.fill();
+      } else { ctx.fillRect(lx - 3, ly - 11, tw + 6, 14); }
+      ctx.fillStyle = '#fff';
+      ctx.fillText(label, lx, ly);
+
+      // Hint
+      if (!this._transformDragState) {
+        ctx.font = '9px monospace';
+        ctx.fillStyle = 'rgba(255,255,255,0.4)';
+        const hint = 'drag to pan pattern · Esc = exit';
+        ctx.fillText(hint, Math.max(2, cx - ctx.measureText(hint).width / 2),
+                     Math.min(oh - 4, rawLy + 14));
+      }
     }
   }
 
@@ -6727,6 +6850,9 @@ export class LiquidShowVisualizer {
     this._detachTransformHandlers();
     const oc = this._transformOverlayCanvas;
     if (!oc) return;
+    // Use the window that owns the overlay canvas (main window, or opener in
+    // popout mode) so keyboard / global mouseup fire in the right context.
+    const hostWin = this._transformHostWindow || window;
 
     const onDown  = (e) => this._onTransformMouseDown(e);
     const onMove  = (e) => this._onTransformMouseMove(e);
@@ -6737,30 +6863,31 @@ export class LiquidShowVisualizer {
     const onKey = (e) => {
       if (e.key === 'Escape') {
         this._deactivateTransformMode();
-        this._rebuildLayerKnobs(); // re-render toolbar so button loses active state
+        this._rebuildLayerKnobs();
       }
     };
 
     oc.addEventListener('mousedown', onDown);
     oc.addEventListener('mousemove', onMove);
-    oc.addEventListener('mouseup', onUp);
+    oc.addEventListener('mouseup',   onUp);
     oc.addEventListener('mouseleave', onLeave);
-    window.addEventListener('mouseup', onUp);    // catch release outside overlay
-    window.addEventListener('keydown', onKey);
+    hostWin.addEventListener('mouseup',  onUp);   // catch release outside overlay
+    hostWin.addEventListener('keydown',  onKey);
 
-    this._transformOverlayHandlers = { oc, onDown, onMove, onUp, onLeave, onKey };
+    this._transformOverlayHandlers = { oc, onDown, onMove, onUp, onLeave, onKey, hostWin };
   }
 
   /** Detach mouse event handlers. */
   _detachTransformHandlers() {
     const h = this._transformOverlayHandlers;
     if (!h) return;
-    h.oc.removeEventListener('mousedown', h.onDown);
-    h.oc.removeEventListener('mousemove', h.onMove);
-    h.oc.removeEventListener('mouseup',   h.onUp);
+    h.oc.removeEventListener('mousedown',  h.onDown);
+    h.oc.removeEventListener('mousemove',  h.onMove);
+    h.oc.removeEventListener('mouseup',    h.onUp);
     h.oc.removeEventListener('mouseleave', h.onLeave);
-    window.removeEventListener('mouseup',  h.onUp);
-    window.removeEventListener('keydown',  h.onKey);
+    const hw = h.hostWin || window;
+    hw.removeEventListener('mouseup',  h.onUp);
+    hw.removeEventListener('keydown',  h.onKey);
     this._transformOverlayHandlers = null;
   }
 
@@ -6866,6 +6993,16 @@ export class LiquidShowVisualizer {
     }
 
     this._drawTransformOverlay();
+
+    // In popout mode, mirror the transform to the main window's layer in
+    // real-time so the rendering stays in sync during the drag (same-origin
+    // direct reference — no postMessage overhead needed).
+    if (this._app?.isPopout && window.opener?.__app?.activeVisualizer) {
+      const mainViz = window.opener.__app.activeVisualizer;
+      if (mainViz.layers[idx]) {
+        mainViz.layers[idx].transform = { ...layer.transform };
+      }
+    }
   }
 
   _onTransformMouseUp(e) {
