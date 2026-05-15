@@ -211,6 +211,7 @@ html, body {
   width: 100vw;
   height: 100vh;
   z-index: 0;
+  pointer-events: auto; /* canvas-container is pointer-events:none; re-enable for canvas */
 }
 
 /* ---- Start Overlay ---- */
