@@ -4305,14 +4305,13 @@ export class LiquidShowVisualizer {
     // Speed: base + audio boost (up to 3× at audioLevel = 1)
     const spd = b.speed * (1 + (b.audioSync ? audioLevel * 2.0 : 0));
 
-    // Lazy-init direction to a random angle (not exactly 45° to avoid corner lock)
+    // Lazy-init direction: 30–45° from horizontal, random quadrant
     if (b._bvx === 0 && b._bvy === 0) {
-      const angle = (0.3 + Math.random() * 0.8) * Math.PI; // bias away from axes
-      b._bvx = Math.cos(angle);
-      b._bvy = Math.sin(angle);
-      // Normalise (cos² + sin² = 1 already, but be safe)
-      const len = Math.hypot(b._bvx, b._bvy);
-      if (len > 0) { b._bvx /= len; b._bvy /= len; }
+      const rad = (30 + Math.random() * 15) * (Math.PI / 180); // 30°–45°
+      const sx = Math.random() < 0.5 ? 1 : -1;
+      const sy = Math.random() < 0.5 ? 1 : -1;
+      b._bvx = Math.cos(rad) * sx;
+      b._bvy = Math.sin(rad) * sy;
     }
 
     // Advance position
