@@ -363,8 +363,8 @@ export class LiquidShowVisualizer {
         x:         0,      // current transform offset X (normalised, same units as transform.x)
         y:         0,      // current transform offset Y
         speed:     0.25,   // base speed in canvas-widths per second
-        audioSync: true,   // audio level boosts speed
-        flash:     true,   // brief color flash on edge contact
+        audioSync: false,  // audio level boosts speed
+        flash:     false,  // brief color flash on edge contact
         _bvx:      0,      // direction unit-vector X (lazy-inited in _updateBounce)
         _bvy:      0,      // direction unit-vector Y
         _flashTimer: 0,    // remaining flash duration (seconds)
@@ -557,8 +557,8 @@ export class LiquidShowVisualizer {
             x:         sb?.x         ?? 0,
             y:         sb?.y         ?? 0,
             speed:     sb?.speed     ?? 0.25,
-            audioSync: sb?.audioSync ?? true,
-            flash:     sb?.flash     ?? true,
+            audioSync: sb?.audioSync ?? false,
+            flash:     sb?.flash     ?? false,
             _bvx: 0, _bvy: 0, _flashTimer: 0, _flashColor: '#ffffff',
           };
         }
@@ -4608,8 +4608,8 @@ export class LiquidShowVisualizer {
           x:         sb?.x         ?? 0,
           y:         sb?.y         ?? 0,
           speed:     sb?.speed     ?? 0.25,
-          audioSync: sb?.audioSync ?? true,
-          flash:     sb?.flash     ?? true,
+          audioSync: sb?.audioSync ?? false,
+          flash:     sb?.flash     ?? false,
           _bvx: 0, _bvy: 0, _flashTimer: 0, _flashColor: '#ffffff',
         };
       }
@@ -4803,7 +4803,7 @@ export class LiquidShowVisualizer {
         // Ensure bounce object exists for content layers, remove for others
         if (CONTENT_LAYER_TYPES.has(layer.type)) {
           if (!layer.bounce) {
-            layer.bounce = { active: false, x: 0, y: 0, speed: 0.25, audioSync: true,
+            layer.bounce = { active: false, x: 0, y: 0, speed: 0.25, audioSync: false,
                              flash: true, _bvx: 0, _bvy: 0, _flashTimer: 0, _flashColor: '#ffffff' };
           }
         } else {
@@ -4944,7 +4944,7 @@ export class LiquidShowVisualizer {
         layer.type = newType;
         // Ensure bounce state exists for content layer types
         if (CONTENT_LAYER_TYPES.has(newType) && !layer.bounce) {
-          layer.bounce = { active: false, x: 0, y: 0, speed: 0.25, audioSync: true,
+          layer.bounce = { active: false, x: 0, y: 0, speed: 0.25, audioSync: false,
                            flash: true, _bvx: 0, _bvy: 0, _flashTimer: 0, _flashColor: '#ffffff' };
         } else if (!CONTENT_LAYER_TYPES.has(newType)) {
           layer.bounce = null;
@@ -6406,7 +6406,7 @@ export class LiquidShowVisualizer {
         }
         // Reset bounce (content layers only)
         if (CONTENT_LAYER_TYPES.has(tgt.type)) {
-          tgt.bounce = { active: false, x: 0, y: 0, speed: 0.25, audioSync: true, flash: true,
+          tgt.bounce = { active: false, x: 0, y: 0, speed: 0.25, audioSync: false, flash: false,
                          _bvx: 0, _bvy: 0, _flashTimer: 0, _flashColor: '#ffffff' };
         }
         // Reset transform to identity
@@ -6864,7 +6864,7 @@ export class LiquidShowVisualizer {
     // Bounce: ensure object exists for content layers, null for others
     if (CONTENT_LAYER_TYPES.has(newType)) {
       if (!layer.bounce) {
-        layer.bounce = { active: false, x: 0, y: 0, speed: 0.25, audioSync: true, flash: true,
+        layer.bounce = { active: false, x: 0, y: 0, speed: 0.25, audioSync: false, flash: false,
                          _bvx: 0, _bvy: 0, _flashTimer: 0, _flashColor: '#ffffff' };
       }
       // 25% chance of bounce with a random speed
@@ -6948,7 +6948,7 @@ export class LiquidShowVisualizer {
       // Bounce: ensure object exists for content layers, null for others
       if (CONTENT_LAYER_TYPES.has(newType)) {
         if (!layer.bounce) {
-          layer.bounce = { active: false, x: 0, y: 0, speed: 0.25, audioSync: true, flash: true,
+          layer.bounce = { active: false, x: 0, y: 0, speed: 0.25, audioSync: false, flash: false,
                            _bvx: 0, _bvy: 0, _flashTimer: 0, _flashColor: '#ffffff' };
         }
         layer.bounce.active = Math.random() < 0.25;
@@ -7024,7 +7024,7 @@ export class LiquidShowVisualizer {
       // Bounce: ensure object exists for content layers, null for others
       if (CONTENT_LAYER_TYPES.has(newType)) {
         if (!layer.bounce) {
-          layer.bounce = { active: false, x: 0, y: 0, speed: 0.25, audioSync: true, flash: true,
+          layer.bounce = { active: false, x: 0, y: 0, speed: 0.25, audioSync: false, flash: false,
                            _bvx: 0, _bvy: 0, _flashTimer: 0, _flashColor: '#ffffff' };
         }
         layer.bounce.active = Math.random() < 0.25;
