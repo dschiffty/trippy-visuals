@@ -4,6 +4,7 @@
 
 import { GALLERY_IMAGES, getGalleryImage, getGalleryThumbnail } from '../image-gallery.js';
 import { LL_PRESETS } from './ll-presets.js';
+import { decodeGif } from '../gif-decoder.js';
 
 // --- Simplex 2D Noise ---
 const F2 = 0.5 * (Math.sqrt(3) - 1);
@@ -869,6 +870,91 @@ export class LiquidShowVisualizer {
     ctx.putImageData(imageData, 0, 0);
   }
 
+  // ── Image file loader ──────────────────────────────────────────────────────
+  // Handles both static images and animated GIFs.
+  // uploadBtn / imgPreview / gifControls are optional UI references that get
+  // updated once loading completes (may be null if called outside the panel).
+  _loadImageFile(file, layer, uploadBtn, imgPreview, gifControls) {
+    const isGif = file.type === 'image/gif'
+      || file.name.toLowerCase().endsWith('.gif');
+
+    if (isGif) {
+      // Read as ArrayBuffer so we can decode frame-by-frame
+      const reader = new FileReader();
+      reader.onload = async (ev) => {
+        try {
+          const { frames } = await Promise.resolve(decodeGif(ev.target.result));
+          if (frames.length === 0) return;
+
+          // Store decoded frames on the layer
+          layer._gifFrames        = frames;
+          layer._gifFrameIndex    = 0;
+          layer._gifLastBuiltFrame = -1;
+          layer._gifTimer         = 0;
+          layer._gifIsAnimated    = frames.length > 1;
+          layer._gifSpeed         ??= 1.0;
+          layer._gifAudioSync     ??= false;
+          layer._gifReactivity    ??= 0.5;
+
+          // Invalidate cached render state
+          layer._imgCanvas  = null;
+          layer._imgPixels  = null;
+          layer._panAccCanvas = null;
+
+          // Set layer.imageData to a still Image for preview & getState
+          const img = new Image();
+          img.src = frames[0].canvas.toDataURL();
+          img.onload = () => { layer.imageData = img; };
+
+          if (uploadBtn) uploadBtn.textContent = '\u{1F5BC} Change';
+          if (imgPreview) {
+            imgPreview.src = frames[0].canvas.toDataURL();
+            imgPreview.style.display = 'block';
+          }
+          // Show/hide GIF-specific controls
+          if (gifControls) gifControls.style.display = layer._gifIsAnimated ? '' : 'none';
+        } catch (err) {
+          console.warn('[liquid-show] GIF decode failed, loading as static:', err);
+          // Fall back to static image load
+          const img = new Image();
+          img.onload = () => {
+            layer.imageData = img;
+            layer._gifFrames = null;
+            layer._gifIsAnimated = false;
+            layer._imgCanvas = null;
+            layer._imgPixels = null;
+            if (uploadBtn) uploadBtn.textContent = '\u{1F5BC} Change';
+            if (imgPreview) { imgPreview.src = img.src; imgPreview.style.display = 'block'; }
+            if (gifControls) gifControls.style.display = 'none';
+          };
+          img.src = URL.createObjectURL(file);
+        }
+      };
+      reader.readAsArrayBuffer(file);
+    } else {
+      // Static image — use DataURL path as before
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        const img = new Image();
+        img.onload = () => {
+          layer.imageData     = img;
+          layer._gifFrames    = null;
+          layer._gifIsAnimated = false;
+          layer._imgCanvas    = null;
+          layer._imgPixels    = null;
+          if (uploadBtn) uploadBtn.textContent = '\u{1F5BC} Change';
+          if (imgPreview) {
+            imgPreview.src = img.src;
+            imgPreview.style.display = 'block';
+          }
+          if (gifControls) gifControls.style.display = 'none';
+        };
+        img.src = ev.target.result;
+      };
+      reader.readAsDataURL(file);
+    }
+  }
+
   _renderImage(layer, ctx, bw, bh, time, audioLevel) {
     if (!layer.imageData) {
       ctx.clearRect(0, 0, bw, bh);
@@ -888,6 +974,30 @@ export class LiquidShowVisualizer {
     if (layer._imgLastTime === undefined) layer._imgLastTime = time;
     const dt = Math.min(0.1, time - layer._imgLastTime);
     layer._imgLastTime = time;
+
+    // --- Animated GIF frame advance ---
+    if (layer._gifFrames && layer._gifFrames.length > 1) {
+      const gifSpeed = (layer._gifSpeed ?? 1.0)
+        * (1 + ((layer._gifAudioSync ?? false) ? audioLevel * (layer._gifReactivity ?? 0.5) * 3.0 : 0));
+      layer._gifTimer = (layer._gifTimer ?? 0) + dt * 1000 * gifSpeed;
+
+      // Advance frames (handle large dt by stepping through multiple frames)
+      let maxSteps = layer._gifFrames.length;
+      while (maxSteps-- > 0) {
+        const frameDelay = layer._gifFrames[layer._gifFrameIndex].delay;
+        if (layer._gifTimer < frameDelay) break;
+        layer._gifTimer -= frameDelay;
+        layer._gifFrameIndex = (layer._gifFrameIndex + 1) % layer._gifFrames.length;
+      }
+
+      // If frame changed, invalidate the cached scaled canvas so it's rebuilt
+      if (layer._gifFrameIndex !== layer._gifLastBuiltFrame) {
+        layer._imgCanvas = null;
+        layer._imgPixels = null;
+        layer._panAccCanvas = null; // motion blur accumulator is stale
+        layer._gifLastBuiltFrame = layer._gifFrameIndex;
+      }
+    }
     if (layer._imgWanderX === undefined) layer._imgWanderX = 0;
     if (layer._imgWanderY === undefined) layer._imgWanderY = 0;
 
@@ -914,14 +1024,18 @@ export class LiquidShowVisualizer {
       panOffY = layer._imgWanderY;
     }
 
-    // Draw the source image to a temp canvas at buffer size if needed
+    // Draw the source image to a temp canvas at buffer size if needed.
+    // For animated GIFs the source is the current frame's pre-composited canvas;
+    // for static images it's layer.imageData (an HTMLImageElement).
     if (!layer._imgCanvas || layer._imgCanvas.width !== bw || layer._imgCanvas.height !== bh) {
       layer._imgCanvas = document.createElement('canvas');
       layer._imgCanvas.width = bw;
       layer._imgCanvas.height = bh;
       const ic = layer._imgCanvas.getContext('2d');
       // Cover-fit the image
-      const img = layer.imageData;
+      const img = (layer._gifFrames && layer._gifFrames.length > 0)
+        ? layer._gifFrames[layer._gifFrameIndex].canvas
+        : layer.imageData;
       const imgAspect = img.width / img.height;
       const bufAspect = bw / bh;
       let sx = 0, sy = 0, sw = img.width, sh = img.height;
@@ -4790,6 +4904,10 @@ export class LiquidShowVisualizer {
         layer._imgLastTime = undefined;
         layer._imgWanderX = undefined;
         layer._imgWanderY = undefined;
+        layer._gifFrames = null;
+        layer._gifIsAnimated = false;
+        layer._gifFrameIndex = 0;
+        layer._gifTimer = 0;
         layer._pulseRings = null;
         layer._lastPulseTime = null;
         layer._stars = null;
@@ -5178,22 +5296,7 @@ export class LiquidShowVisualizer {
       fileInput.addEventListener('change', (e) => {
         const file = e.target.files[0];
         if (!file) return;
-        const reader = new FileReader();
-        reader.onload = (ev) => {
-          const img = new Image();
-          img.onload = () => {
-            layer.imageData = img;
-            layer._imgCanvas = null;
-            layer._imgPixels = null;
-            uploadBtn.textContent = '\u{1F5BC} Change';
-            if (imgPreview) {
-              imgPreview.src = img.src;
-              imgPreview.style.display = 'block';
-            }
-          };
-          img.src = ev.target.result;
-        };
-        reader.readAsDataURL(file);
+        this._loadImageFile(file, layer, uploadBtn, imgPreview, gifControls);
       });
 
       // Gallery button
@@ -5343,6 +5446,85 @@ export class LiquidShowVisualizer {
       blurRow.appendChild(blurSlider);
       blurRow.appendChild(blurVal);
       container.appendChild(blurRow);
+
+      // --- Animated GIF controls (shown only when an animated GIF is loaded) ---
+      const gifLabelCss = imgLabelCss;
+      const gifControls = document.createElement('div');
+      gifControls.className = 'll-gif-controls';
+      gifControls.style.display = layer._gifIsAnimated ? '' : 'none';
+
+      // Playback Speed
+      const gifSpeedRow = document.createElement('div');
+      gifSpeedRow.className = 'll-image-row';
+      gifSpeedRow.style.gap = '6px';
+      const gifSpeedLabel = document.createElement('span');
+      gifSpeedLabel.style.cssText = gifLabelCss;
+      gifSpeedLabel.textContent = 'GIF Speed:';
+      gifSpeedRow.appendChild(gifSpeedLabel);
+      const gifSpeedSlider = document.createElement('input');
+      gifSpeedSlider.type = 'range';
+      gifSpeedSlider.className = 'll-row-slider';
+      gifSpeedSlider.min = '0.1'; gifSpeedSlider.max = '4'; gifSpeedSlider.step = '0.05';
+      gifSpeedSlider.value = String(layer._gifSpeed ?? 1.0);
+      const gifSpeedVal = document.createElement('span');
+      gifSpeedVal.style.cssText = 'font-size:10px;color:#aaa;min-width:28px;text-align:right;';
+      gifSpeedVal.textContent = Number(gifSpeedSlider.value).toFixed(2) + 'x';
+      gifSpeedSlider.addEventListener('input', () => {
+        layer._gifSpeed = parseFloat(gifSpeedSlider.value);
+        gifSpeedVal.textContent = layer._gifSpeed.toFixed(2) + 'x';
+      });
+      gifSpeedRow.appendChild(gifSpeedSlider);
+      gifSpeedRow.appendChild(gifSpeedVal);
+      gifControls.appendChild(gifSpeedRow);
+
+      // Audio Sync toggle
+      const gifSyncRow = document.createElement('div');
+      gifSyncRow.className = 'll-image-row';
+      gifSyncRow.style.gap = '6px';
+      const gifSyncLabel = document.createElement('span');
+      gifSyncLabel.style.cssText = gifLabelCss;
+      gifSyncLabel.textContent = 'Audio Sync:';
+      gifSyncRow.appendChild(gifSyncLabel);
+      const gifSyncBtn = document.createElement('button');
+      gifSyncBtn.className = 'll-toggle' + ((layer._gifAudioSync ?? false) ? ' active' : '');
+      gifSyncBtn.style.cssText = 'padding:2px 8px;font-size:9px;';
+      gifSyncBtn.textContent = (layer._gifAudioSync ?? false) ? 'On' : 'Off';
+
+      // Reactivity slider (only visible when audio sync on)
+      const gifReactRow = document.createElement('div');
+      gifReactRow.className = 'll-image-row';
+      gifReactRow.style.gap = '6px';
+      gifReactRow.style.display = (layer._gifAudioSync ?? false) ? '' : 'none';
+      const gifReactLabel = document.createElement('span');
+      gifReactLabel.style.cssText = gifLabelCss;
+      gifReactLabel.textContent = 'Reactivity:';
+      gifReactRow.appendChild(gifReactLabel);
+      const gifReactSlider = document.createElement('input');
+      gifReactSlider.type = 'range';
+      gifReactSlider.className = 'll-row-slider';
+      gifReactSlider.min = '0.1'; gifReactSlider.max = '2.0'; gifReactSlider.step = '0.05';
+      gifReactSlider.value = String(layer._gifReactivity ?? 0.5);
+      const gifReactVal = document.createElement('span');
+      gifReactVal.style.cssText = 'font-size:10px;color:#aaa;min-width:28px;text-align:right;';
+      gifReactVal.textContent = Number(gifReactSlider.value).toFixed(2);
+      gifReactSlider.addEventListener('input', () => {
+        layer._gifReactivity = parseFloat(gifReactSlider.value);
+        gifReactVal.textContent = layer._gifReactivity.toFixed(2);
+      });
+      gifReactRow.appendChild(gifReactSlider);
+      gifReactRow.appendChild(gifReactVal);
+
+      gifSyncBtn.addEventListener('click', () => {
+        layer._gifAudioSync = !(layer._gifAudioSync ?? false);
+        gifSyncBtn.textContent = layer._gifAudioSync ? 'On' : 'Off';
+        gifSyncBtn.classList.toggle('active', layer._gifAudioSync);
+        gifReactRow.style.display = layer._gifAudioSync ? '' : 'none';
+      });
+      gifSyncRow.appendChild(gifSyncBtn);
+      gifControls.appendChild(gifSyncRow);
+      gifControls.appendChild(gifReactRow);
+
+      container.appendChild(gifControls);
     }
 
     // Webcam controls (only for webcam layers, single-select only)
@@ -6819,6 +7001,8 @@ export class LiquidShowVisualizer {
       layer.imageData = img;
       layer._imgCanvas = null;
       layer._imgPixels = null;
+      layer._gifFrames = null;
+      layer._gifIsAnimated = false;
       // Randomize image-specific settings
       const panModes = ['off', 'pendulum', 'wander', 'wave'];
       layer._imgPanMode    = panModes[Math.floor(Math.random() * panModes.length)];
@@ -6908,6 +7092,8 @@ export class LiquidShowVisualizer {
         layer.imageData = img;
         layer._imgCanvas = null;
         layer._imgPixels = null;
+        layer._gifFrames = null;
+        layer._gifIsAnimated = false;
       }
       if (newType === 'lissajous') {
         layer._lissajousShape = 1 + Math.floor(Math.random() * 9);
@@ -6985,6 +7171,8 @@ export class LiquidShowVisualizer {
         layer.imageData = img;
         layer._imgCanvas = null;
         layer._imgPixels = null;
+        layer._gifFrames = null;
+        layer._gifIsAnimated = false;
       }
       if (newType === 'lissajous') {
         layer._lissajousShape = 1 + Math.floor(Math.random() * 9);
