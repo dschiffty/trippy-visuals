@@ -2145,6 +2145,19 @@ html, body {
   background: #d4e4f8 !important;
 }
 
+/* Crop button active state (lives in the mask row, uses ll-toggle base) */
+.ll-toggle.ll-crop-btn.active {
+  background: #fdf0e8 !important;
+  border-top-color: #d8b8a0 !important;
+  border-left-color: #d8b8a0 !important;
+  border-right-color: #b87860 !important;
+  border-bottom-color: #b87860 !important;
+  color: #5c2a1a !important;
+}
+.ll-toggle.ll-crop-btn.active:hover {
+  background: #f8e4d4 !important;
+}
+
 .ll-image-row {
   display: flex;
   align-items: center;

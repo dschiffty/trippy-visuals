@@ -300,6 +300,19 @@ export class LiquidShowVisualizer {
     this._transformBtn            = null; // ref to the toggle button (for active state)
     this._transformTmpCanvas      = null; // scratch canvas for pre-applying transforms
     this._transformToolbarEl      = null; // floating Done toolbar shown while mode is active
+
+    // Crop mode state
+    this._cropModeLayerIndex  = -1;   // -1 = inactive
+    this._cropDragState       = null; // active drag
+    this._cropOverlayCanvas   = null; // overlay <canvas> over main canvas
+    this._cropOverlayRObs     = null; // ResizeObserver keeping overlay in sync
+    this._cropOverlayHandlers = null; // {oc, onDown, onMove, onUp, onLeave, onKey}
+    this._cropBtn             = null; // ref to the toggle button
+    this._cropToolbarEl       = null; // floating toolbar shown while mode is active
+    this._cropPending         = null; // crop being edited (copy; not yet applied)
+    this._cropAspectLock      = null; // null = free, or W/H number (pixel ratio)
+    this._cropTmpCanvas       = null; // scratch canvas for compositing crop clip
+    this._cropHostWindow      = null; // host window (opener in popout mode)
   }
 
   // --- Layer Creation ---
@@ -336,6 +349,9 @@ export class LiquidShowVisualizer {
       // x/y = offset of layer centre as fraction of canvas width/height (0 = centred).
       // scaleX/scaleY = size multiplier (1 = fills canvas exactly).
       transform: { x: 0, y: 0, scaleX: 1, scaleY: 1 },
+      // Non-destructive crop: { x1, y1, x2, y2 } in 0-1 normalised canvas coords,
+      // or null (= no crop).  Only meaningful for image/webcam layer types.
+      crop: null,
       // Mask system: array of shapes (rect/ellipse/freehand) in normalized 0-1 coords.
       // Stored as array to allow future multi-mask support without data migration.
       _masks: [],
@@ -393,6 +409,7 @@ export class LiquidShowVisualizer {
         maskMode: Array.isArray(l._masks) && l._masks.length > 0 ? (l._maskMode ?? 'include') : undefined,
         maskFeather: (l._maskFeather ?? 0) > 0 ? l._maskFeather : undefined,
         transform: l.transform ? { ...l.transform } : undefined,
+        crop: CONTENT_LAYER_TYPES.has(l.type) && l.crop ? { ...l.crop } : undefined,
       })),
       selectedLayerIndex: this.selectedLayerIndex,
       soloLayerIndex: this.soloLayerIndex,
@@ -409,6 +426,10 @@ export class LiquidShowVisualizer {
     // Exit mask edit mode before swapping layers — indices may no longer be valid
     if (this._maskEditingLayerIndex >= 0) {
       this._exitMaskEditMode();
+    }
+    // Exit crop mode — indices may no longer be valid after layer swap
+    if (this._cropModeLayerIndex >= 0) {
+      this._deactivateCropMode();
     }
 
     // Stop any live webcam streams on the current layers before we discard them.
@@ -497,6 +518,15 @@ export class LiquidShowVisualizer {
           ? { x: saved.transform.x ?? 0, y: saved.transform.y ?? 0,
               scaleX: saved.transform.scaleX ?? 1, scaleY: saved.transform.scaleY ?? 1 }
           : { x: 0, y: 0, scaleX: 1, scaleY: 1 };
+        // Restore crop (image/webcam only)
+        if (CONTENT_LAYER_TYPES.has(saved.type) && saved.crop) {
+          layer.crop = {
+            x1: saved.crop.x1 ?? 0, y1: saved.crop.y1 ?? 0,
+            x2: saved.crop.x2 ?? 1, y2: saved.crop.y2 ?? 1,
+          };
+        } else {
+          layer.crop = null;
+        }
         return layer;
       });
     }
@@ -2565,8 +2595,9 @@ export class LiquidShowVisualizer {
 
   _enterMaskEditMode(layerIndex) {
     if (layerIndex < 0 || layerIndex >= this.layers.length) return;
-    // Exit transform mode if active — they can't share the canvas overlay area
+    // Exit transform / crop mode if active — they can't share the canvas overlay area
     if (this._transformModeLayerIndex >= 0) this._deactivateTransformMode();
+    if (this._cropModeLayerIndex >= 0) this._deactivateCropMode();
     const layer = this.layers[layerIndex];
     if (!Array.isArray(layer._masks)) layer._masks = [];
     if (!layer._maskMode) layer._maskMode = 'include';
@@ -3584,6 +3615,32 @@ export class LiquidShowVisualizer {
         srcCanvas = ttc;
       }
 
+      // --- Crop: non-destructive clip (image/webcam only, not during active edit) ---
+      // While crop mode is editing this layer we skip the saved crop so the user
+      // sees the full layer under the dim overlay; the pending region is shown by
+      // the overlay canvas, not the composited output.
+      const _isCropEditing = this._cropModeLayerIndex === i;
+      const _cropData = (!_isCropEditing && CONTENT_LAYER_TYPES.has(layer.type)) ? layer.crop : null;
+      const _hasCrop = _cropData &&
+        (_cropData.x1 > 0.001 || _cropData.y1 > 0.001 || _cropData.x2 < 0.999 || _cropData.y2 < 0.999);
+      if (_hasCrop) {
+        if (!this._cropTmpCanvas) this._cropTmpCanvas = document.createElement('canvas');
+        const ctc = this._cropTmpCanvas;
+        if (ctc.width !== w || ctc.height !== h) { ctc.width = w; ctc.height = h; }
+        const ctCtx = ctc.getContext('2d');
+        ctCtx.clearRect(0, 0, w, h);
+        ctCtx.save();
+        ctCtx.beginPath();
+        ctCtx.rect(
+          _cropData.x1 * w, _cropData.y1 * h,
+          (_cropData.x2 - _cropData.x1) * w, (_cropData.y2 - _cropData.y1) * h
+        );
+        ctCtx.clip();
+        ctCtx.drawImage(srcCanvas, 0, 0, w, h);
+        ctCtx.restore();
+        srcCanvas = ctc;
+      }
+
       const hasMask = this._layerHasActiveMask(layer);
       const feather  = layer._maskFeather ?? 0;
       if (hasMask && feather > 0) {
@@ -3615,6 +3672,11 @@ export class LiquidShowVisualizer {
     // Transform overlay (separate overlay canvas — not captured in snapshots)
     if (this._transformModeLayerIndex >= 0) {
       this._drawTransformOverlay();
+    }
+
+    // Crop overlay (separate overlay canvas — not captured in snapshots)
+    if (this._cropModeLayerIndex >= 0) {
+      this._drawCropOverlay();
     }
 
     timing.total = performance.now() - drawStart;
@@ -5747,6 +5809,31 @@ export class LiquidShowVisualizer {
         maskRow.appendChild(transformBtn);
       }
 
+      // Crop button — image and webcam only
+      if (CONTENT_LAYER_TYPES.has(layer.type)) {
+        const isCropActive = this._cropModeLayerIndex === this.selectedLayerIndex;
+        const hasCropApplied = !!(layer.crop &&
+          (layer.crop.x1 > 0.001 || layer.crop.y1 > 0.001 ||
+           layer.crop.x2 < 0.999 || layer.crop.y2 < 0.999));
+        const cropBtn = document.createElement('button');
+        cropBtn.className = 'll-toggle ll-crop-btn' + (isCropActive ? ' active' : '');
+        cropBtn.innerHTML = hasCropApplied ? '✂ Crop ●' : '✂ Crop';
+        cropBtn.title = hasCropApplied
+          ? 'Adjust crop region (crop active). Enter crop mode to resize or clear.'
+          : 'Enter crop mode to define a non-destructive crop region. Enter = apply, Esc = cancel.';
+        cropBtn.style.cssText = 'padding:4px 8px;font-size:10px;flex-shrink:0;white-space:nowrap;';
+        cropBtn.addEventListener('click', () => {
+          if (this._isLayerLocked(this.selectedLayerIndex)) return;
+          if (this._cropModeLayerIndex === this.selectedLayerIndex) {
+            this._exitCropMode(true); // apply pending crop on second click
+          } else {
+            this._activateCropMode(this.selectedLayerIndex);
+          }
+        });
+        this._cropBtn = cropBtn;
+        maskRow.appendChild(cropBtn);
+      }
+
       container.appendChild(maskRow);
     }
 
@@ -6690,8 +6777,9 @@ export class LiquidShowVisualizer {
 
   /** Activate transform mode for the given layer index. */
   _activateTransformMode(layerIndex) {
-    // Exit mask edit mode if open — they share the canvas
+    // Exit mask edit / crop mode if open — they share the canvas
     if (this._maskEditingLayerIndex >= 0) this._exitMaskEditMode();
+    if (this._cropModeLayerIndex >= 0) this._deactivateCropMode();
 
     this._transformModeLayerIndex = layerIndex;
 
@@ -7124,5 +7212,549 @@ export class LiquidShowVisualizer {
     this._transformDragState = null;
     this._drawTransformOverlay();
     this._pushHistory();
+  }
+
+  // ============================================================
+  //  Crop Mode
+  // ============================================================
+
+  /** Floating HUD toolbar shown while crop mode is active. */
+  _buildCropToolbar() {
+    this._destroyCropToolbar();
+    const idx   = this._cropModeLayerIndex;
+    const layer = idx >= 0 ? this.layers[idx] : null;
+    if (!layer) return;
+
+    const bar = document.createElement('div');
+    bar.className = 'll-crop-toolbar';
+    bar.style.cssText = [
+      'position:fixed;left:50%;top:16px;transform:translateX(-50%);',
+      'display:flex;gap:6px;align-items:center;flex-wrap:wrap;justify-content:center;',
+      'background:rgba(15,15,18,0.92);border:1px solid #444;border-radius:8px;',
+      'padding:6px 12px;z-index:10001;',
+      'font-family:monospace;color:#eee;box-shadow:0 4px 16px rgba(0,0,0,0.5);',
+      'user-select:none;white-space:nowrap;',
+    ].join('');
+
+    // Title
+    const title = document.createElement('span');
+    title.textContent = `✂ Crop: Layer ${idx + 1}`;
+    title.style.cssText = 'font-size:11px;font-weight:bold;';
+    bar.appendChild(title);
+
+    const sep0 = document.createElement('span');
+    sep0.style.cssText = 'width:1px;height:18px;background:#444;flex-shrink:0;';
+    bar.appendChild(sep0);
+
+    // Aspect ratio label
+    const arLabel = document.createElement('span');
+    arLabel.textContent = 'AR:';
+    arLabel.style.cssText = 'font-size:10px;color:#888;';
+    bar.appendChild(arLabel);
+
+    // Aspect ratio buttons
+    const AR_OPTIONS = [
+      { label: 'Free', value: null  },
+      { label: '16:9', value: 16/9  },
+      { label: '9:16', value: 9/16  },
+      { label: '1:1',  value: 1     },
+      { label: '4:3',  value: 4/3   },
+      { label: '3:2',  value: 3/2   },
+    ];
+    const arBtns = [];
+    for (const opt of AR_OPTIONS) {
+      const btn = document.createElement('button');
+      btn.className = 'll-toggle' + (this._cropAspectLock === opt.value ? ' active' : '');
+      btn.textContent = opt.label;
+      btn.style.cssText = 'padding:2px 6px;font-size:10px;';
+      btn.addEventListener('click', () => {
+        this._cropAspectLock = opt.value;
+        if (opt.value !== null && this._cropPending) {
+          this._applyCropAspectLock(this._cropPending, opt.value);
+          this._drawCropOverlay();
+        }
+        arBtns.forEach((b, i) => b.classList.toggle('active', AR_OPTIONS[i].value === this._cropAspectLock));
+      });
+      arBtns.push(btn);
+      bar.appendChild(btn);
+    }
+
+    const sep1 = document.createElement('span');
+    sep1.style.cssText = 'width:1px;height:18px;background:#444;flex-shrink:0;';
+    bar.appendChild(sep1);
+
+    // Clear Crop button
+    const clearBtn = document.createElement('button');
+    clearBtn.className = 'll-toggle';
+    clearBtn.textContent = '✕ Clear Crop';
+    clearBtn.title = 'Remove crop — restore full layer';
+    clearBtn.style.cssText = 'padding:4px 8px;font-size:11px;';
+    clearBtn.addEventListener('click', () => {
+      const lyr = idx >= 0 ? this.layers[idx] : null;
+      this._deactivateCropMode();
+      if (lyr) lyr.crop = null;
+      this._rebuildLayerKnobs();
+      this._pushHistory();
+    });
+    bar.appendChild(clearBtn);
+
+    const sep2 = document.createElement('span');
+    sep2.style.cssText = 'width:1px;height:18px;background:#444;flex-shrink:0;';
+    bar.appendChild(sep2);
+
+    // Reset button — restore pending to saved crop (or full canvas)
+    const resetBtn = document.createElement('button');
+    resetBtn.className = 'll-toggle';
+    resetBtn.textContent = '↺ Reset';
+    resetBtn.title = 'Reset crop box to last applied value';
+    resetBtn.style.cssText = 'padding:4px 8px;font-size:11px;';
+    resetBtn.addEventListener('click', () => {
+      this._cropPending = layer.crop ? { ...layer.crop } : { x1: 0, y1: 0, x2: 1, y2: 1 };
+      this._drawCropOverlay();
+    });
+    bar.appendChild(resetBtn);
+
+    // Apply / Done button
+    const applyBtn = document.createElement('button');
+    applyBtn.className = 'll-toggle';
+    applyBtn.textContent = '✓ Apply';
+    applyBtn.title = 'Apply crop and exit (Enter)';
+    applyBtn.style.cssText = 'padding:4px 8px;font-size:11px;background:#3478f6;color:#fff;font-weight:bold;';
+    applyBtn.addEventListener('click', () => this._exitCropMode(true));
+    bar.appendChild(applyBtn);
+
+    // Cancel button
+    const cancelBtn = document.createElement('button');
+    cancelBtn.className = 'll-toggle';
+    cancelBtn.textContent = 'Cancel';
+    cancelBtn.title = 'Discard changes and exit (Esc)';
+    cancelBtn.style.cssText = 'padding:4px 8px;font-size:11px;';
+    cancelBtn.addEventListener('click', () => this._exitCropMode(false));
+    bar.appendChild(cancelBtn);
+
+    document.body.appendChild(bar);
+    this._cropToolbarEl = bar;
+  }
+
+  /**
+   * Apply an aspect-ratio lock to the pending crop, keeping the crop box
+   * centred and as large as possible within the current bounds.
+   * ar = desired pixel-space W:H ratio (e.g. 16/9).
+   */
+  _applyCropAspectLock(crop, ar) {
+    const oc = this._cropOverlayCanvas;
+    const ow = oc ? oc.width  : 1;
+    const oh = oc ? oc.height : 1;
+    const wPx = (crop.x2 - crop.x1) * ow;
+    const hPx = (crop.y2 - crop.y1) * oh;
+    const cx  = (crop.x1 + crop.x2) / 2;
+    const cy  = (crop.y1 + crop.y2) / 2;
+    const curAR = wPx / hPx;
+    if (curAR > ar) {
+      // Too wide — shrink width to match height
+      const newWPx   = hPx * ar;
+      const newWNorm = newWPx / ow;
+      crop.x1 = cx - newWNorm / 2;
+      crop.x2 = cx + newWNorm / 2;
+    } else {
+      // Too tall — shrink height to match width
+      const newHPx   = wPx / ar;
+      const newHNorm = newHPx / oh;
+      crop.y1 = cy - newHNorm / 2;
+      crop.y2 = cy + newHNorm / 2;
+    }
+    this._clampCrop(crop);
+  }
+
+  /** Clamp a crop rect so all coords are in [0,1] with at least 1% size. */
+  _clampCrop(crop) {
+    const MIN = 0.01;
+    crop.x1 = Math.max(0, crop.x1);
+    crop.y1 = Math.max(0, crop.y1);
+    crop.x2 = Math.min(1, crop.x2);
+    crop.y2 = Math.min(1, crop.y2);
+    if (crop.x2 - crop.x1 < MIN) crop.x2 = Math.min(1, crop.x1 + MIN);
+    if (crop.y2 - crop.y1 < MIN) crop.y2 = Math.min(1, crop.y1 + MIN);
+  }
+
+  /** Remove the floating crop toolbar. */
+  _destroyCropToolbar() {
+    if (this._cropToolbarEl) {
+      this._cropToolbarEl.remove();
+      this._cropToolbarEl = null;
+    }
+  }
+
+  /** Create the transparent overlay canvas for crop mode. */
+  _setupCropOverlay() {
+    this._removeCropOverlay();
+    const isPopout = !!(this._app?.isPopout && window.opener?.__app);
+    const hostWin    = isPopout ? window.opener              : window;
+    const hostCanvas = isPopout ? window.opener.__app.canvas : this.canvas;
+    const container  = hostCanvas?.parentElement;
+    if (!container) return;
+
+    this._cropHostWindow = hostWin;
+
+    const oc = hostWin.document.createElement('canvas');
+    oc.style.cssText = [
+      'position:absolute;top:0;left:0;width:100%;height:100%;',
+      'pointer-events:none;z-index:11;', // above transform overlay (z-index 10)
+    ].join('');
+    container.appendChild(oc);
+    this._cropOverlayCanvas = oc;
+
+    const sync = () => {
+      oc.width  = container.offsetWidth  || 1;
+      oc.height = container.offsetHeight || 1;
+      if (this._cropModeLayerIndex >= 0) this._drawCropOverlay();
+    };
+    sync();
+    if (typeof ResizeObserver !== 'undefined') {
+      this._cropOverlayRObs = new ResizeObserver(sync);
+      this._cropOverlayRObs.observe(container);
+    }
+  }
+
+  /** Detach and remove the crop overlay canvas. */
+  _removeCropOverlay() {
+    if (this._cropOverlayRObs) {
+      this._cropOverlayRObs.disconnect();
+      this._cropOverlayRObs = null;
+    }
+    this._detachCropHandlers();
+    if (this._cropOverlayCanvas) {
+      this._cropOverlayCanvas.remove();
+      this._cropOverlayCanvas = null;
+    }
+  }
+
+  /** Activate crop mode for the given layer index. */
+  _activateCropMode(layerIndex) {
+    if (layerIndex < 0 || layerIndex >= this.layers.length) return;
+    const layer = this.layers[layerIndex];
+    if (!layer || !CONTENT_LAYER_TYPES.has(layer.type)) return;
+
+    // Exit conflicting modes
+    if (this._maskEditingLayerIndex >= 0) this._exitMaskEditMode();
+    if (this._transformModeLayerIndex >= 0) this._deactivateTransformMode();
+
+    this._cropModeLayerIndex = layerIndex;
+    this._cropAspectLock = null;
+    // Start pending crop from saved crop or full canvas
+    this._cropPending = layer.crop ? { ...layer.crop } : { x1: 0, y1: 0, x2: 1, y2: 1 };
+
+    this._setupCropOverlay();
+    if (this._cropOverlayCanvas) {
+      this._cropOverlayCanvas.style.pointerEvents = 'auto';
+    }
+    this._attachCropHandlers();
+    this._drawCropOverlay();
+
+    if (this._cropBtn) this._cropBtn.classList.add('active');
+
+    // Hide chrome for full canvas visibility (skip in popout — main already visible)
+    const isPopout = !!(this._app?.isPopout);
+    if (!isPopout) this._applyLLUIHidden(true);
+    this._buildCropToolbar();
+  }
+
+  /** Deactivate crop mode — quiet cleanup, does NOT apply the pending crop. */
+  _deactivateCropMode() {
+    const wasActive = this._cropModeLayerIndex >= 0;
+    this._cropModeLayerIndex = -1;
+    this._cropDragState = null;
+    this._cropPending   = null;
+    if (this._cropOverlayCanvas) {
+      this._cropOverlayCanvas.style.pointerEvents = 'none';
+      this._cropOverlayCanvas.style.cursor = '';
+      const ctx = this._cropOverlayCanvas.getContext('2d');
+      ctx.clearRect(0, 0, this._cropOverlayCanvas.width, this._cropOverlayCanvas.height);
+    }
+    this._detachCropHandlers();
+    if (this._cropBtn) this._cropBtn.classList.remove('active');
+    this._destroyCropToolbar();
+    if (wasActive) {
+      const isPopout = !!(this._app?.isPopout);
+      if (!isPopout) this._applyLLUIHidden(this._llUiHidden);
+    }
+  }
+
+  /**
+   * Full user-initiated exit: optionally save pending crop, deactivate,
+   * rebuild the panel, and push history.
+   * @param {boolean} apply  true = save pending crop; false = discard
+   */
+  _exitCropMode(apply) {
+    const idx   = this._cropModeLayerIndex;
+    const layer = idx >= 0 ? this.layers[idx] : null;
+    if (layer && apply && this._cropPending) {
+      const p = this._cropPending;
+      const isMeaningful = p.x1 > 0.001 || p.y1 > 0.001 || p.x2 < 0.999 || p.y2 < 0.999;
+      layer.crop = isMeaningful ? { ...p } : null;
+    }
+    this._deactivateCropMode();
+    this._rebuildLayerKnobs();
+    this._pushHistory();
+  }
+
+  /** Return 8 handle descriptors in overlay pixels for the given crop rect. */
+  _getCropHandles(crop, ow, oh) {
+    const x1 = crop.x1 * ow, y1 = crop.y1 * oh;
+    const x2 = crop.x2 * ow, y2 = crop.y2 * oh;
+    const cx = (x1 + x2) / 2, cy = (y1 + y2) / 2;
+    return [
+      { id: 'nw', x: x1, y: y1, cursor: 'nw-resize' },
+      { id: 'n',  x: cx, y: y1, cursor: 'n-resize'  },
+      { id: 'ne', x: x2, y: y1, cursor: 'ne-resize' },
+      { id: 'w',  x: x1, y: cy, cursor: 'w-resize'  },
+      { id: 'e',  x: x2, y: cy, cursor: 'e-resize'  },
+      { id: 'sw', x: x1, y: y2, cursor: 'sw-resize' },
+      { id: 's',  x: cx, y: y2, cursor: 's-resize'  },
+      { id: 'se', x: x2, y: y2, cursor: 'se-resize' },
+    ];
+  }
+
+  /** Hit-test mouse position against crop handles and box interior. */
+  _hitTestCropHandle(mx, my, crop, ow, oh) {
+    const HANDLE_R = 7;
+    const handles = this._getCropHandles(crop, ow, oh);
+    for (const h of handles) {
+      const dx = mx - h.x, dy = my - h.y;
+      if (dx * dx + dy * dy <= HANDLE_R * HANDLE_R) return h;
+    }
+    const x1 = crop.x1 * ow, y1 = crop.y1 * oh;
+    const x2 = crop.x2 * ow, y2 = crop.y2 * oh;
+    if (mx >= x1 && mx <= x2 && my >= y1 && my <= y2) {
+      return { id: 'move', cursor: 'move' };
+    }
+    return null;
+  }
+
+  /** Draw the dim overlay + crop box + handles + rule-of-thirds grid. */
+  _drawCropOverlay() {
+    const oc = this._cropOverlayCanvas;
+    if (!oc) return;
+    const ctx = oc.getContext('2d');
+    const ow = oc.width, oh = oc.height;
+    ctx.clearRect(0, 0, ow, oh);
+
+    if (this._cropModeLayerIndex < 0 || !this._cropPending) return;
+    const crop = this._cropPending;
+    const x1 = crop.x1 * ow, y1 = crop.y1 * oh;
+    const x2 = crop.x2 * ow, y2 = crop.y2 * oh;
+    const cw = x2 - x1, ch = y2 - y1;
+
+    // ── Dim outside crop box ────────────────────────────────────────────────
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    ctx.fillRect(0,   0,  ow,    y1     ); // top
+    ctx.fillRect(0,   y2, ow,    oh - y2); // bottom
+    ctx.fillRect(0,   y1, x1,    ch     ); // left strip
+    ctx.fillRect(x2,  y1, ow-x2, ch     ); // right strip
+
+    // ── Crop border ─────────────────────────────────────────────────────────
+    ctx.save();
+    ctx.strokeStyle = 'rgba(255,255,255,0.95)';
+    ctx.lineWidth   = 1.5;
+    ctx.shadowColor = 'rgba(0,0,0,0.5)';
+    ctx.shadowBlur  = 2;
+    ctx.strokeRect(x1, y1, cw, ch);
+    ctx.shadowBlur  = 0;
+    ctx.restore();
+
+    // ── Rule-of-thirds grid ─────────────────────────────────────────────────
+    ctx.save();
+    ctx.strokeStyle = 'rgba(255,255,255,0.2)';
+    ctx.lineWidth   = 0.75;
+    for (let i = 1; i <= 2; i++) {
+      const gx = x1 + cw * i / 3;
+      const gy = y1 + ch * i / 3;
+      ctx.beginPath(); ctx.moveTo(gx, y1); ctx.lineTo(gx, y2); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(x1, gy); ctx.lineTo(x2, gy); ctx.stroke();
+    }
+    ctx.restore();
+
+    // ── Square handles ──────────────────────────────────────────────────────
+    const handles = this._getCropHandles(crop, ow, oh);
+    const HS = 8;
+    for (const h of handles) {
+      ctx.fillStyle   = 'rgba(255,255,255,0.95)';
+      ctx.shadowColor = 'rgba(0,0,0,0.5)';
+      ctx.shadowBlur  = 2;
+      ctx.fillRect(h.x - HS / 2, h.y - HS / 2, HS, HS);
+      ctx.shadowBlur  = 0;
+      ctx.strokeStyle = 'rgba(0,0,0,0.4)';
+      ctx.lineWidth   = 0.75;
+      ctx.strokeRect(h.x - HS / 2, h.y - HS / 2, HS, HS);
+    }
+
+    // ── Size / AR label ─────────────────────────────────────────────────────
+    const wPct  = ((crop.x2 - crop.x1) * 100).toFixed(0);
+    const hPct  = ((crop.y2 - crop.y1) * 100).toFixed(0);
+    const arStr = this._cropAspectLock
+      ? ` · ${this._getCropARLabel(this._cropAspectLock)}` : '';
+    const label = this._cropDragState
+      ? `${wPct}% × ${hPct}%${arStr}`
+      : `✂ ${wPct}% × ${hPct}%${arStr}`;
+    const cx_m  = (x1 + x2) / 2;
+    ctx.font    = 'bold 10px monospace';
+    const tw    = ctx.measureText(label).width;
+    const lx    = Math.max(2, Math.min(ow - tw - 6, cx_m - tw / 2));
+    const rawLy = y2 + 14;
+    const ly    = rawLy > oh - 4 ? y1 - 6 : rawLy;
+    ctx.fillStyle = 'rgba(0,0,0,0.7)';
+    if (ctx.roundRect) {
+      ctx.beginPath(); ctx.roundRect(lx - 3, ly - 11, tw + 6, 14, 3); ctx.fill();
+    } else { ctx.fillRect(lx - 3, ly - 11, tw + 6, 14); }
+    ctx.fillStyle = '#fff';
+    ctx.fillText(label, lx, ly);
+
+    // ── Hint ────────────────────────────────────────────────────────────────
+    if (!this._cropDragState) {
+      ctx.font      = '9px monospace';
+      ctx.fillStyle = 'rgba(255,255,255,0.45)';
+      const hint    = 'drag edges/corners to crop · Enter = apply · Esc = cancel';
+      ctx.fillText(hint, Math.max(2, cx_m - ctx.measureText(hint).width / 2),
+                   Math.min(oh - 4, rawLy + 14));
+    }
+  }
+
+  /** Return a readable string for a numeric pixel AR. */
+  _getCropARLabel(ar) {
+    if (Math.abs(ar - 16/9) < 0.01) return '16:9';
+    if (Math.abs(ar - 9/16) < 0.01) return '9:16';
+    if (Math.abs(ar - 1)    < 0.01) return '1:1';
+    if (Math.abs(ar - 4/3)  < 0.01) return '4:3';
+    if (Math.abs(ar - 3/2)  < 0.01) return '3:2';
+    return ar.toFixed(2);
+  }
+
+  /** Attach mouse/keyboard event handlers to the crop overlay canvas. */
+  _attachCropHandlers() {
+    this._detachCropHandlers();
+    const oc = this._cropOverlayCanvas;
+    if (!oc) return;
+    const hostWin = this._cropHostWindow || window;
+
+    const onDown  = (e) => this._onCropMouseDown(e);
+    const onMove  = (e) => this._onCropMouseMove(e);
+    const onUp    = (e) => this._onCropMouseUp(e);
+    const onLeave = ()  => { if (!this._cropDragState && oc) oc.style.cursor = 'default'; };
+    const onKey   = (e) => {
+      if (e.key === 'Escape') this._exitCropMode(false);
+      if (e.key === 'Enter')  this._exitCropMode(true);
+    };
+
+    oc.addEventListener('mousedown',  onDown);
+    oc.addEventListener('mousemove',  onMove);
+    oc.addEventListener('mouseup',    onUp);
+    oc.addEventListener('mouseleave', onLeave);
+    hostWin.addEventListener('mouseup',  onUp);
+    hostWin.addEventListener('keydown',  onKey);
+
+    this._cropOverlayHandlers = { oc, onDown, onMove, onUp, onLeave, onKey, hostWin };
+  }
+
+  /** Detach all crop event handlers. */
+  _detachCropHandlers() {
+    const h = this._cropOverlayHandlers;
+    if (!h) return;
+    h.oc.removeEventListener('mousedown',  h.onDown);
+    h.oc.removeEventListener('mousemove',  h.onMove);
+    h.oc.removeEventListener('mouseup',    h.onUp);
+    h.oc.removeEventListener('mouseleave', h.onLeave);
+    const hw = h.hostWin || window;
+    hw.removeEventListener('mouseup',  h.onUp);
+    hw.removeEventListener('keydown',  h.onKey);
+    this._cropOverlayHandlers = null;
+  }
+
+  _onCropMouseDown(e) {
+    if (e.button !== 0) return;
+    const oc   = this._cropOverlayCanvas;
+    const crop = this._cropPending;
+    if (!oc || !crop) return;
+    const mx = e.offsetX, my = e.offsetY;
+    const ow = oc.width,   oh = oc.height;
+    const hit = this._hitTestCropHandle(mx, my, crop, ow, oh);
+    if (!hit) return;
+    e.preventDefault();
+    this._cropDragState = {
+      handle: hit.id,
+      startMx: mx, startMy: my,
+      startCrop: { ...crop },
+      ow, oh,
+    };
+  }
+
+  _onCropMouseMove(e) {
+    const oc   = this._cropOverlayCanvas;
+    const crop = this._cropPending;
+    if (!oc || !crop) return;
+    const mx = e.offsetX, my = e.offsetY;
+    const ow = oc.width,   oh = oc.height;
+
+    if (!this._cropDragState) {
+      const hit = this._hitTestCropHandle(mx, my, crop, ow, oh);
+      oc.style.cursor = hit ? hit.cursor : 'default';
+      return;
+    }
+
+    e.preventDefault();
+    const drag = this._cropDragState;
+    const dx = (mx - drag.startMx) / ow;
+    const dy = (my - drag.startMy) / oh;
+    const sc = drag.startCrop;
+
+    if (drag.handle === 'move') {
+      // Pan the entire crop box
+      const w = sc.x2 - sc.x1, h = sc.y2 - sc.y1;
+      crop.x1 = Math.max(0, Math.min(1 - w, sc.x1 + dx));
+      crop.y1 = Math.max(0, Math.min(1 - h, sc.y1 + dy));
+      crop.x2 = crop.x1 + w;
+      crop.y2 = crop.y1 + h;
+    } else {
+      const hId = drag.handle;
+      let nx1 = sc.x1, ny1 = sc.y1, nx2 = sc.x2, ny2 = sc.y2;
+      if (hId.includes('n')) ny1 = sc.y1 + dy;
+      if (hId.includes('s')) ny2 = sc.y2 + dy;
+      if (hId.includes('w')) nx1 = sc.x1 + dx;
+      if (hId.includes('e')) nx2 = sc.x2 + dx;
+
+      // Aspect-ratio lock on corner drags
+      if (this._cropAspectLock !== null && hId.length === 2) {
+        const ar   = this._cropAspectLock;
+        const newWpx = (nx2 - nx1) * ow;
+        const newHpx = (ny2 - ny1) * oh;
+        if (newWpx / ar >= newHpx) {
+          // Width change dominates — fit height to width
+          const h2 = (nx2 - nx1) * ow / (ar * oh);
+          if (hId.includes('n')) ny1 = ny2 - h2; else ny2 = ny1 + h2;
+        } else {
+          // Height change dominates — fit width to height
+          const w2 = (ny2 - ny1) * ar * oh / ow;
+          if (hId.includes('w')) nx1 = nx2 - w2; else nx2 = nx1 + w2;
+        }
+      }
+
+      // Minimum 5% of canvas
+      const MIN = 0.05;
+      if (nx2 - nx1 < MIN) { if (hId.includes('w')) nx1 = nx2 - MIN; else nx2 = nx1 + MIN; }
+      if (ny2 - ny1 < MIN) { if (hId.includes('n')) ny1 = ny2 - MIN; else ny2 = ny1 + MIN; }
+
+      // Clamp to [0, 1]
+      crop.x1 = Math.max(0, Math.min(nx1, 0.99));
+      crop.y1 = Math.max(0, Math.min(ny1, 0.99));
+      crop.x2 = Math.max(0.01, Math.min(nx2, 1));
+      crop.y2 = Math.max(0.01, Math.min(ny2, 1));
+    }
+
+    this._drawCropOverlay();
+  }
+
+  _onCropMouseUp(e) {
+    if (!this._cropDragState) return;
+    this._cropDragState = null;
+    this._drawCropOverlay();
   }
 }
