@@ -299,6 +299,7 @@ export class LiquidShowVisualizer {
     this._transformOverlayHandlers = null; // {oc, onDown, onMove, onUp, onLeave, onKey}
     this._transformBtn            = null; // ref to the toggle button (for active state)
     this._transformTmpCanvas      = null; // scratch canvas for pre-applying transforms
+    this._transformToolbarEl      = null; // floating Done toolbar shown while mode is active
   }
 
   // --- Layer Creation ---
@@ -2564,6 +2565,8 @@ export class LiquidShowVisualizer {
 
   _enterMaskEditMode(layerIndex) {
     if (layerIndex < 0 || layerIndex >= this.layers.length) return;
+    // Exit transform mode if active — they can't share the canvas overlay area
+    if (this._transformModeLayerIndex >= 0) this._deactivateTransformMode();
     const layer = this.layers[layerIndex];
     if (!Array.isArray(layer._masks)) layer._masks = [];
     if (!layer._maskMode) layer._maskMode = 'include';
@@ -5735,7 +5738,7 @@ export class LiquidShowVisualizer {
         transformBtn.addEventListener('click', () => {
           if (this._isLayerLocked(this.selectedLayerIndex)) return;
           if (this._transformModeLayerIndex === this.selectedLayerIndex) {
-            this._deactivateTransformMode();
+            this._exitTransformMode();
           } else {
             this._activateTransformMode(this.selectedLayerIndex);
           }
@@ -6558,6 +6561,84 @@ export class LiquidShowVisualizer {
   //  Pan / Transform Mode
   // ============================================================
 
+  /** Floating HUD toolbar shown while transform mode is active. */
+  _buildTransformToolbar() {
+    this._destroyTransformToolbar();
+    const idx   = this._transformModeLayerIndex;
+    const layer = idx >= 0 ? this.layers[idx] : null;
+    if (!layer) return;
+
+    const isContent = CONTENT_LAYER_TYPES.has(layer.type);
+
+    const bar = document.createElement('div');
+    bar.className = 'll-transform-toolbar';
+    bar.style.cssText = [
+      'position:fixed;left:50%;top:16px;transform:translateX(-50%);',
+      'display:flex;gap:8px;align-items:center;',
+      'background:rgba(15,15,18,0.92);border:1px solid #444;border-radius:8px;',
+      'padding:6px 12px;z-index:10000;',
+      'font-family:monospace;color:#eee;box-shadow:0 4px 16px rgba(0,0,0,0.5);',
+      'user-select:none;white-space:nowrap;',
+    ].join('');
+
+    const title = document.createElement('span');
+    title.textContent = `⊞ ${isContent ? 'Transform' : 'Pan'}: Layer ${idx + 1}`;
+    title.style.cssText = 'font-size:11px;font-weight:bold;';
+    bar.appendChild(title);
+
+    const hint = document.createElement('span');
+    hint.textContent = isContent
+      ? 'drag inside = move · handles = scale · Shift = lock AR'
+      : 'drag anywhere to pan pattern';
+    hint.style.cssText = 'font-size:10px;color:#888;';
+    bar.appendChild(hint);
+
+    const sep = document.createElement('span');
+    sep.style.cssText = 'width:1px;height:18px;background:#444;flex-shrink:0;';
+    bar.appendChild(sep);
+
+    // Reset button
+    const resetBtn = document.createElement('button');
+    resetBtn.className = 'll-toggle';
+    resetBtn.textContent = '↺ Reset';
+    resetBtn.title = 'Reset position and scale to default';
+    resetBtn.style.cssText = 'padding:4px 8px;font-size:11px;';
+    resetBtn.addEventListener('click', () => {
+      if (layer.transform) {
+        layer.transform.x = 0; layer.transform.y = 0;
+        layer.transform.scaleX = 1; layer.transform.scaleY = 1;
+      }
+      this._drawTransformOverlay();
+      // Also mirror to main window in popout mode
+      if (this._app?.isPopout && window.opener?.__app?.activeVisualizer) {
+        const mainViz = window.opener.__app.activeVisualizer;
+        if (mainViz.layers[idx]) mainViz.layers[idx].transform = { ...layer.transform };
+      }
+      this._pushHistory();
+    });
+    bar.appendChild(resetBtn);
+
+    // Done button
+    const doneBtn = document.createElement('button');
+    doneBtn.className = 'll-toggle';
+    doneBtn.textContent = '✓ Done';
+    doneBtn.title = 'Exit transform mode (Esc)';
+    doneBtn.style.cssText = 'padding:4px 8px;font-size:11px;background:#3478f6;color:#fff;font-weight:bold;';
+    doneBtn.addEventListener('click', () => this._exitTransformMode());
+    bar.appendChild(doneBtn);
+
+    document.body.appendChild(bar);
+    this._transformToolbarEl = bar;
+  }
+
+  /** Remove the floating transform toolbar. */
+  _destroyTransformToolbar() {
+    if (this._transformToolbarEl) {
+      this._transformToolbarEl.remove();
+      this._transformToolbarEl = null;
+    }
+  }
+
   /** Create the transparent overlay canvas that shows bounding box + handles. */
   _setupTransformOverlay() {
     this._removeTransformOverlay();
@@ -6634,10 +6715,18 @@ export class LiquidShowVisualizer {
     this._drawTransformOverlay();
 
     if (this._transformBtn) this._transformBtn.classList.add('active');
+
+    // Hide all chrome so the full canvas is visible for dragging — same
+    // behaviour as mask edit mode.  In popout mode the main canvas is already
+    // unobscured, so we only show the floating toolbar without hiding the panel.
+    const isPopout = !!(this._app?.isPopout);
+    if (!isPopout) this._applyLLUIHidden(true);
+    this._buildTransformToolbar();
   }
 
-  /** Deactivate transform mode (clears overlay, restores cursor). */
+  /** Deactivate transform mode (clears overlay, restores cursor, restores panel). */
   _deactivateTransformMode() {
+    const wasActive = this._transformModeLayerIndex >= 0;
     this._transformModeLayerIndex = -1;
     this._transformDragState = null;
     if (this._transformOverlayCanvas) {
@@ -6648,6 +6737,20 @@ export class LiquidShowVisualizer {
     }
     this._detachTransformHandlers();
     if (this._transformBtn) this._transformBtn.classList.remove('active');
+    // Remove the floating toolbar and restore the settings panel to its prior
+    // state (same pattern as _exitMaskEditMode).
+    this._destroyTransformToolbar();
+    if (wasActive) {
+      const isPopout = !!(this._app?.isPopout);
+      if (!isPopout) this._applyLLUIHidden(this._llUiHidden);
+    }
+  }
+
+  /** Full user-initiated exit: deactivate + rebuild panel + sync history. */
+  _exitTransformMode() {
+    this._deactivateTransformMode();
+    this._rebuildLayerKnobs();
+    this._pushHistory();
   }
 
   /** Return bounding-box geometry in overlay pixels for the given layer. */
@@ -6870,10 +6973,7 @@ export class LiquidShowVisualizer {
       if (!this._transformDragState && oc) oc.style.cursor = 'default';
     };
     const onKey = (e) => {
-      if (e.key === 'Escape') {
-        this._deactivateTransformMode();
-        this._rebuildLayerKnobs();
-      }
+      if (e.key === 'Escape') this._exitTransformMode();
     };
 
     oc.addEventListener('mousedown', onDown);
