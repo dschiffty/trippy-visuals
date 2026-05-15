@@ -3851,6 +3851,8 @@ export class LiquidShowVisualizer {
   buildPanel(controlPanelEl, app) {
     this.destroyPanel();
     this._app = app || null;
+    // Install global Cmd/Ctrl+Z / Cmd/Ctrl+Shift+Z keyboard shortcuts.
+    this._attachGlobalUndoShortcut();
 
     // Load London Tube as the default state on first visit this session
     if (!this._hasInitialized) {
@@ -4139,6 +4141,19 @@ export class LiquidShowVisualizer {
     // Clean up transform mode
     this._deactivateTransformMode();
     this._removeTransformOverlay();
+    this._deactivateCropMode();
+    this._removeCropOverlay();
+    // Remove the global Cmd/Ctrl+Z keyboard shortcut
+    this._detachGlobalUndoShortcut();
+    // Remove any lingering toast
+    if (this._historyToastEl) {
+      this._historyToastEl.remove();
+      this._historyToastEl = null;
+    }
+    if (this._historyToastTimer) {
+      clearTimeout(this._historyToastTimer);
+      this._historyToastTimer = null;
+    }
     // Clean up mask editor if active
     if (this._maskEditingLayerIndex >= 0) {
       this._exitMaskEditMode();
@@ -4230,6 +4245,8 @@ export class LiquidShowVisualizer {
         masks: Array.isArray(l._masks) && l._masks.length > 0 ? this._cloneMasks(l._masks) : undefined,
         maskMode: Array.isArray(l._masks) && l._masks.length > 0 ? (l._maskMode ?? 'include') : undefined,
         maskFeather: (l._maskFeather ?? 0) > 0 ? l._maskFeather : undefined,
+        transform: l.transform ? { ...l.transform } : undefined,
+        crop: CONTENT_LAYER_TYPES.has(l.type) && l.crop ? { ...l.crop } : undefined,
       })),
       selectedLayerIndex: this.selectedLayerIndex,
       selectedLayerIndices: [...this.selectedLayerIndices],
@@ -4258,17 +4275,88 @@ export class LiquidShowVisualizer {
   }
 
   _undo() {
-    if (this._historyIndex <= 0) return;
+    // In popout mode, forward the request to the main window so history stays
+    // unified there.  The main window will broadcast the new state back to us
+    // (and show its own toast for the boundary case).
+    if (this._app?.isPopout && this._app?.popoutSync) {
+      this._showHistoryToast('Undo');
+      this._app.popoutSync.send('history-action', { action: 'undo' });
+      return;
+    }
+    if (this._historyIndex <= 0) {
+      this._showHistoryToast('Nothing to undo');
+      return;
+    }
     this._historyIndex--;
     this._restoreSnapshot(this._history[this._historyIndex]);
     this._updateHistoryButtons();
+    this._broadcastStateAfterRestore();
+    this._showHistoryToast('Undo');
   }
 
   _redo() {
-    if (this._historyIndex >= this._history.length - 1) return;
+    if (this._app?.isPopout && this._app?.popoutSync) {
+      this._showHistoryToast('Redo');
+      this._app.popoutSync.send('history-action', { action: 'redo' });
+      return;
+    }
+    if (this._historyIndex >= this._history.length - 1) {
+      this._showHistoryToast('Nothing to redo');
+      return;
+    }
     this._historyIndex++;
     this._restoreSnapshot(this._history[this._historyIndex]);
     this._updateHistoryButtons();
+    this._broadcastStateAfterRestore();
+    this._showHistoryToast('Redo');
+  }
+
+  /** Broadcast restored state to the other window via onStateChange. */
+  _broadcastStateAfterRestore() {
+    if (this.onStateChange && !this._suppressBroadcast) {
+      try { this.onStateChange(this.getState()); }
+      catch (e) { console.warn('[liquid-show] state broadcast (restore) failed:', e); }
+    }
+  }
+
+  /**
+   * Show a brief unobtrusive toast notification.  Used for undo/redo feedback
+   * so the user knows the shortcut/button registered even when the visual
+   * change is small.  Fades out after ~1.1s.
+   */
+  _showHistoryToast(message) {
+    // Remove any existing toast first to avoid stacking
+    if (this._historyToastEl) {
+      this._historyToastEl.remove();
+      if (this._historyToastTimer) clearTimeout(this._historyToastTimer);
+      this._historyToastEl = null;
+      this._historyToastTimer = null;
+    }
+    const toast = document.createElement('div');
+    toast.className = 'll-history-toast';
+    toast.textContent = message;
+    toast.style.cssText = [
+      'position:fixed;left:50%;bottom:48px;transform:translateX(-50%);',
+      'background:rgba(15,15,18,0.92);color:#fff;',
+      'padding:8px 18px;border-radius:6px;',
+      'font-family:monospace;font-size:12px;font-weight:bold;letter-spacing:0.3px;',
+      'border:1px solid rgba(255,255,255,0.12);',
+      'box-shadow:0 4px 16px rgba(0,0,0,0.5);',
+      'z-index:10002;pointer-events:none;',
+      'opacity:0;transition:opacity 120ms ease;',
+    ].join('');
+    document.body.appendChild(toast);
+    this._historyToastEl = toast;
+    // Fade in
+    requestAnimationFrame(() => { toast.style.opacity = '1'; });
+    // Auto-fade out
+    this._historyToastTimer = setTimeout(() => {
+      toast.style.opacity = '0';
+      setTimeout(() => {
+        if (toast.parentNode) toast.parentNode.removeChild(toast);
+        if (this._historyToastEl === toast) this._historyToastEl = null;
+      }, 200);
+    }, 900);
   }
 
   _restoreSnapshot(json) {
@@ -4356,6 +4444,15 @@ export class LiquidShowVisualizer {
         ? { x: saved.transform.x ?? 0, y: saved.transform.y ?? 0,
             scaleX: saved.transform.scaleX ?? 1, scaleY: saved.transform.scaleY ?? 1 }
         : { x: 0, y: 0, scaleX: 1, scaleY: 1 };
+      // Restore crop (image/webcam only)
+      if (CONTENT_LAYER_TYPES.has(saved.type) && saved.crop) {
+        layer.crop = {
+          x1: saved.crop.x1 ?? 0, y1: saved.crop.y1 ?? 0,
+          x2: saved.crop.x2 ?? 1, y2: saved.crop.y2 ?? 1,
+        };
+      } else {
+        layer.crop = null;
+      }
       return layer;
     });
 
@@ -4380,6 +4477,56 @@ export class LiquidShowVisualizer {
     if (this._redoBtn) {
       this._redoBtn.disabled = this._historyIndex >= this._history.length - 1;
       this._redoBtn.style.opacity = this._historyIndex >= this._history.length - 1 ? '0.4' : '1';
+    }
+  }
+
+  /**
+   * Install a window-level keydown listener for Cmd+Z / Ctrl+Z (undo) and
+   * Cmd+Shift+Z / Ctrl+Shift+Z (redo).  The same code path detects both Mac
+   * (metaKey) and Windows/Linux (ctrlKey) so the shortcut feels native on
+   * either platform without special-casing.
+   *
+   * Behaviour:
+   *  - Skipped when focus is in an editable field (text input, textarea,
+   *    contenteditable, or <select>) so we don't hijack normal text editing.
+   *  - Skipped while mask edit mode is active — that mode owns its own
+   *    Cmd+Z handler for mask-local undo/redo (`_maskHistoryUndo/Redo`).
+   *  - In popout mode, the handler forwards to main via `_undo()/_redo()`
+   *    which themselves route through BroadcastChannel.
+   */
+  _attachGlobalUndoShortcut() {
+    this._detachGlobalUndoShortcut();
+    const handler = (e) => {
+      // Skip if mask edit mode is active — it has its own Cmd+Z handler
+      if (this._maskEditingLayerIndex >= 0) return;
+      // Only respond to the Z key (with platform modifier)
+      if (e.key !== 'z' && e.key !== 'Z') return;
+      const mod = e.metaKey || e.ctrlKey;
+      if (!mod) return;
+      // Skip when typing in editable fields
+      const t = e.target;
+      if (t) {
+        const tag = t.tagName;
+        if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || t.isContentEditable) return;
+      }
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.shiftKey) {
+        this._redo();
+      } else {
+        this._undo();
+      }
+    };
+    // Use capture phase so we run before any field-level handlers that
+    // might also be listening.  We still bail out if focus is in a field.
+    window.addEventListener('keydown', handler, true);
+    this._globalUndoHandler = handler;
+  }
+
+  _detachGlobalUndoShortcut() {
+    if (this._globalUndoHandler) {
+      window.removeEventListener('keydown', this._globalUndoHandler, true);
+      this._globalUndoHandler = null;
     }
   }
 
@@ -5893,18 +6040,23 @@ export class LiquidShowVisualizer {
       }
     });
 
-    // Undo / Redo buttons
+    // Undo / Redo buttons \u2014 paired with global Cmd/Ctrl+Z keyboard shortcuts
+    const _isMac = /Mac|iPhone|iPad|iPod/.test(
+      (typeof navigator !== 'undefined' ? (navigator.platform || navigator.userAgent) : '')
+    );
+    const _undoHint = _isMac ? '\u2318Z'      : 'Ctrl+Z';
+    const _redoHint = _isMac ? '\u2318\u21E7Z'    : 'Ctrl+Shift+Z';
     const undoBtn = document.createElement('button');
     undoBtn.className = 'param-tool-btn ll-history-btn';
     undoBtn.innerHTML = '\u25C0 Back';
-    undoBtn.title = 'Undo (go back to previous settings)';
+    undoBtn.title = `Undo (${_undoHint})`;
     undoBtn.addEventListener('click', () => this._undo());
     this._undoBtn = undoBtn;
 
     const redoBtn = document.createElement('button');
     redoBtn.className = 'param-tool-btn ll-history-btn';
     redoBtn.innerHTML = 'Fwd \u25B6';
-    redoBtn.title = 'Redo (go forward to next settings)';
+    redoBtn.title = `Redo (${_redoHint})`;
     redoBtn.addEventListener('click', () => this._redo());
     this._redoBtn = redoBtn;
 

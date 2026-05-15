@@ -1844,6 +1844,16 @@ class App {
         this._handleRemoteAudioAction(action, args);
       });
 
+      // Undo/Redo from popout — forward to the main viz so history stays
+      // unified in this window.  The viz's _undo/_redo will broadcast the
+      // new state back to the popout via onStateChange.
+      this.popoutSync.on('history-action', ({ action } = {}) => {
+        const viz = this.visualizers.liquidShow;
+        if (!viz) return;
+        if (action === 'undo') viz._undo();
+        else if (action === 'redo') viz._redo();
+      });
+
       // Mode switch requested from popout
       this.popoutSync.on('switch-mode', ({ key } = {}) => {
         if (!key || key === this.activeKey) return;
