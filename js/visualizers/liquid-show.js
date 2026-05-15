@@ -879,56 +879,73 @@ export class LiquidShowVisualizer {
       || file.name.toLowerCase().endsWith('.gif');
 
     if (isGif) {
-      // Read as ArrayBuffer so we can decode frame-by-frame
+      const fileMB = file.size / (1024 * 1024);
+
+      // Hard limit: 8 MB — beyond this the synchronous LZW decode will OOM the tab
+      if (fileMB > 8) {
+        alert(`GIF too large to decode (${fileMB.toFixed(1)} MB).\nPlease use a GIF under 8 MB.`);
+        return;
+      }
+
+      // Soft warning: 2–8 MB might be slow / memory-hungry
+      if (fileMB > 2) {
+        const ok = confirm(
+          `This GIF is ${fileMB.toFixed(1)} MB. Decoding large GIFs can be slow or run out of memory.\n\nContinue anyway?`
+        );
+        if (!ok) return;
+      }
+
       const reader = new FileReader();
-      reader.onload = async (ev) => {
+      reader.onload = (ev) => {
+        let frames;
         try {
-          const { frames } = await Promise.resolve(decodeGif(ev.target.result));
-          if (frames.length === 0) return;
-
-          // Store decoded frames on the layer
-          layer._gifFrames        = frames;
-          layer._gifFrameIndex    = 0;
-          layer._gifLastBuiltFrame = -1;
-          layer._gifTimer         = 0;
-          layer._gifIsAnimated    = frames.length > 1;
-          layer._gifSpeed         ??= 1.0;
-          layer._gifAudioSync     ??= false;
-          layer._gifReactivity    ??= 0.5;
-
-          // Invalidate cached render state
-          layer._imgCanvas  = null;
-          layer._imgPixels  = null;
-          layer._panAccCanvas = null;
-
-          // Set layer.imageData to a still Image for preview & getState
-          const img = new Image();
-          img.src = frames[0].canvas.toDataURL();
-          img.onload = () => { layer.imageData = img; };
-
-          if (uploadBtn) uploadBtn.textContent = '\u{1F5BC} Change';
-          if (imgPreview) {
-            imgPreview.src = frames[0].canvas.toDataURL();
-            imgPreview.style.display = 'block';
-          }
-          // Show/hide GIF-specific controls
-          if (gifControls) gifControls.style.display = layer._gifIsAnimated ? '' : 'none';
+          const result = decodeGif(ev.target.result);
+          frames = result.frames;
+          console.log(`[GIF debug] decoded ${frames.length} frames, GIF size: ${result.width}×${result.height}`);
+          frames.forEach((f, i) => {
+            console.log(`[GIF debug] frame ${i}: canvas ${f.canvas.width}×${f.canvas.height}, delay ${f.delay} ms`);
+          });
         } catch (err) {
-          console.warn('[liquid-show] GIF decode failed, loading as static:', err);
-          // Fall back to static image load
-          const img = new Image();
-          img.onload = () => {
-            layer.imageData = img;
-            layer._gifFrames = null;
-            layer._gifIsAnimated = false;
-            layer._imgCanvas = null;
-            layer._imgPixels = null;
-            if (uploadBtn) uploadBtn.textContent = '\u{1F5BC} Change';
-            if (imgPreview) { imgPreview.src = img.src; imgPreview.style.display = 'block'; }
-            if (gifControls) gifControls.style.display = 'none';
-          };
-          img.src = URL.createObjectURL(file);
+          console.error('[liquid-show] GIF decode error:', err);
+          alert(`Failed to decode GIF: ${err.message || err}\n\nTry a different file.`);
+          return;
         }
+
+        if (!frames || frames.length === 0) {
+          alert('GIF contained no frames.');
+          return;
+        }
+
+        // Store decoded frames — renderer can now use them immediately (no async wait)
+        layer._gifFrames         = frames;
+        layer._gifFrameIndex     = 0;
+        layer._gifLastBuiltFrame = -1;
+        layer._gifTimer          = 0;
+        layer._gifIsAnimated     = frames.length > 1;
+        layer._gifSpeed          ??= 1.0;
+        layer._gifAudioSync      ??= false;
+        layer._gifReactivity     ??= 0.5;
+
+        // Invalidate cached render state so _renderImage rebuilds from frame 0
+        layer._imgCanvas    = null;
+        layer._imgPixels    = null;
+        layer._panAccCanvas = null;
+
+        // Set layer.imageData synchronously from the first frame's canvas so the
+        // existing `if (!hasSource)` guard and getState() work correctly.
+        // Using a canvas directly as layer.imageData is not ideal for getState (it
+        // wants .src), so we also kick off an async Image load for that.
+        layer.imageData = frames[0].canvas; // allow rendering immediately
+        const previewImg = new Image();
+        previewImg.onload = () => { layer.imageData = previewImg; }; // upgrade to Image with .src
+        previewImg.src = frames[0].canvas.toDataURL();
+
+        if (uploadBtn) uploadBtn.textContent = '\u{1F5BC} Change';
+        if (imgPreview) {
+          imgPreview.src = frames[0].canvas.toDataURL();
+          imgPreview.style.display = 'block';
+        }
+        if (gifControls) gifControls.style.display = layer._gifIsAnimated ? '' : 'none';
       };
       reader.readAsArrayBuffer(file);
     } else {
@@ -956,7 +973,9 @@ export class LiquidShowVisualizer {
   }
 
   _renderImage(layer, ctx, bw, bh, time, audioLevel) {
-    if (!layer.imageData) {
+    // Allow rendering if we have GIF frames even before layer.imageData resolves async
+    const hasSource = layer.imageData || (layer._gifFrames && layer._gifFrames.length > 0);
+    if (!hasSource) {
       ctx.clearRect(0, 0, bw, bh);
       return;
     }
@@ -1033,20 +1052,36 @@ export class LiquidShowVisualizer {
       layer._imgCanvas.height = bh;
       const ic = layer._imgCanvas.getContext('2d');
       // Cover-fit the image
-      const img = (layer._gifFrames && layer._gifFrames.length > 0)
+      const isGifSource = layer._gifFrames && layer._gifFrames.length > 0;
+      const img = isGifSource
         ? layer._gifFrames[layer._gifFrameIndex].canvas
         : layer.imageData;
-      const imgAspect = img.width / img.height;
-      const bufAspect = bw / bh;
-      let sx = 0, sy = 0, sw = img.width, sh = img.height;
-      if (imgAspect > bufAspect) {
-        sw = img.height * bufAspect;
-        sx = (img.width - sw) / 2;
+
+      // DEBUG: log dimensions so we can verify the frame scales up correctly
+      console.log('[GIF debug] building _imgCanvas —',
+        isGifSource ? `GIF frame ${layer._gifFrameIndex}` : 'static image',
+        `source: ${img.width}×${img.height}`,
+        `buffer: ${bw}×${bh}`
+      );
+
+      const imgW = img.width;
+      const imgH = img.height;
+      if (imgW > 0 && imgH > 0) {
+        const imgAspect = imgW / imgH;
+        const bufAspect = bw / bh;
+        let sx = 0, sy = 0, sw = imgW, sh = imgH;
+        if (imgAspect > bufAspect) {
+          sw = imgH * bufAspect;
+          sx = (imgW - sw) / 2;
+        } else {
+          sh = imgW / bufAspect;
+          sy = (imgH - sh) / 2;
+        }
+        console.log('[GIF debug] cover-fit — src crop:', Math.round(sx), Math.round(sy), Math.round(sw), Math.round(sh), '→ dst:', bw, bh);
+        ic.drawImage(img, sx, sy, sw, sh, 0, 0, bw, bh);
       } else {
-        sh = img.width / bufAspect;
-        sy = (img.height - sh) / 2;
+        console.warn('[GIF debug] source has zero dimension:', imgW, imgH);
       }
-      ic.drawImage(img, sx, sy, sw, sh, 0, 0, bw, bh);
       layer._imgPixels = ic.getImageData(0, 0, bw, bh).data;
     }
 
