@@ -61,7 +61,6 @@ export function decodeGif(arrayBuffer) {
   const lsdPacked   = u8();
   const bgIndex     = u8();
   skip(1); // pixel aspect ratio
-  console.log('[GIF decoder] logical screen:', width, '×', height);
 
   const gctFlag = (lsdPacked >> 7) & 1;
   const gctSize = lsdPacked & 0x7;
@@ -192,12 +191,6 @@ export function decodeGif(arrayBuffer) {
       snap.width  = width;
       snap.height = height;
       snap.getContext('2d').drawImage(compCanvas, 0, 0);
-
-      if (frames.length === 0) {
-        // Log first frame only to avoid console spam on long GIFs
-        console.log('[GIF decoder] frame 0 snap canvas:', snap.width, '×', snap.height,
-          'sub-image:', imgW, '×', imgH, '@', imgLeft, ',', imgTop, 'delay:', gceDelay, 'ms');
-      }
 
       frames.push({ canvas: snap, delay: gceDelay });
 

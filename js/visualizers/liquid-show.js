@@ -901,10 +901,6 @@ export class LiquidShowVisualizer {
         try {
           const result = decodeGif(ev.target.result);
           frames = result.frames;
-          console.log(`[GIF debug] decoded ${frames.length} frames, GIF size: ${result.width}×${result.height}`);
-          frames.forEach((f, i) => {
-            console.log(`[GIF debug] frame ${i}: canvas ${f.canvas.width}×${f.canvas.height}, delay ${f.delay} ms`);
-          });
         } catch (err) {
           console.error('[liquid-show] GIF decode error:', err);
           alert(`Failed to decode GIF: ${err.message || err}\n\nTry a different file.`);
@@ -1057,13 +1053,6 @@ export class LiquidShowVisualizer {
         ? layer._gifFrames[layer._gifFrameIndex].canvas
         : layer.imageData;
 
-      // DEBUG: log dimensions so we can verify the frame scales up correctly
-      console.log('[GIF debug] building _imgCanvas —',
-        isGifSource ? `GIF frame ${layer._gifFrameIndex}` : 'static image',
-        `source: ${img.width}×${img.height}`,
-        `buffer: ${bw}×${bh}`
-      );
-
       const imgW = img.width;
       const imgH = img.height;
       if (imgW > 0 && imgH > 0) {
@@ -1077,10 +1066,7 @@ export class LiquidShowVisualizer {
           sh = imgW / bufAspect;
           sy = (imgH - sh) / 2;
         }
-        console.log('[GIF debug] cover-fit — src crop:', Math.round(sx), Math.round(sy), Math.round(sw), Math.round(sh), '→ dst:', bw, bh);
         ic.drawImage(img, sx, sy, sw, sh, 0, 0, bw, bh);
-      } else {
-        console.warn('[GIF debug] source has zero dimension:', imgW, imgH);
       }
       layer._imgPixels = ic.getImageData(0, 0, bw, bh).data;
     }
