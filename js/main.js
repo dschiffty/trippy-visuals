@@ -127,7 +127,7 @@ class App {
       const ro = new ResizeObserver(() => {
         this.resizeCanvas();
       });
-      ro.observe(this.canvas.parentElement);
+      ro.observe(document.body);
 
       // Handle orientation changes on mobile (Safari doesn't always fire ResizeObserver)
       window.addEventListener('orientationchange', () => {
@@ -1362,10 +1362,8 @@ class App {
 
   resizeCanvas() {
     if (this._snapshotInProgress) return; // freeze canvas dimensions during hi-res capture
-    const container = this.canvas.parentElement;
-    const rect = container.getBoundingClientRect();
-    const cssW = rect.width;
-    const cssH = rect.height;
+    const cssW = window.innerWidth;
+    const cssH = window.innerHeight;
 
     // Render at reduced resolution for performance.
     // _qualityScale ranges from 0.5 to 1.0 (adaptive quality system).
@@ -2120,10 +2118,8 @@ class App {
       // _snapshotInProgress blocks resizeCanvas() and _adaptiveQualityUpdate()
       // so nothing external will fight us while we're at the elevated resolution.
       const dpr = window.devicePixelRatio || 1;
-      const container = this.canvas.parentElement;
-      const rect = container.getBoundingClientRect();
-      this.canvas.width  = Math.round(rect.width  * dpr);
-      this.canvas.height = Math.round(rect.height * dpr);
+      this.canvas.width  = Math.round(window.innerWidth  * dpr);
+      this.canvas.height = Math.round(window.innerHeight * dpr);
 
       // Let the live animation loop render TWO complete frames at the new resolution
       // rather than calling draw() manually.  This guarantees:
