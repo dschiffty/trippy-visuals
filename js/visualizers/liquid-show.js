@@ -6898,6 +6898,8 @@ export class LiquidShowVisualizer {
       'position:absolute;top:0;left:0;width:100%;height:100%;',
       'pointer-events:none;z-index:10;',
     ].join('');
+    // Tag so main can sweep up orphans if popout closes mid-transform
+    oc.className = 'll-transform-overlay' + (isPopout ? ' ll-popout-overlay' : '');
     container.appendChild(oc);
     this._transformOverlayCanvas = oc;
 
@@ -7553,6 +7555,8 @@ export class LiquidShowVisualizer {
       'position:absolute;top:0;left:0;width:100%;height:100%;',
       'pointer-events:none;z-index:11;', // above transform overlay (z-index 10)
     ].join('');
+    // Tag so main can sweep up orphans if popout closes mid-crop
+    oc.className = 'll-crop-overlay' + (isPopout ? ' ll-popout-overlay' : '');
     container.appendChild(oc);
     this._cropOverlayCanvas = oc;
 

@@ -1771,12 +1771,19 @@ class App {
       };
     }
 
-    // Receive remote state → apply locally without re-broadcasting
+    // Receive remote state → apply locally without re-broadcasting.
+    // On the MAIN side we also push the new state to the history stack so
+    // Cmd+Z/Ctrl+Z works for changes made in the popout (main is the
+    // authoritative history holder).  _suppressBroadcast prevents the push
+    // from echoing the same state back to the popout.
     this.popoutSync.on('state', (state) => {
       const viz = this.visualizers.liquidShow;
       if (!viz) return;
       viz._suppressBroadcast = true;
-      try { viz.setState(state); } finally { viz._suppressBroadcast = false; }
+      try {
+        viz.setState(state);
+        if (!this.isPopout) viz._pushHistory?.();
+      } finally { viz._suppressBroadcast = false; }
       // In popout: re-fit window height after the state-driven DOM update settles
       if (this.isPopout) requestAnimationFrame(() => this._fitPopoutToContent());
     });
@@ -1813,10 +1820,23 @@ class App {
         this._applyRemoteAudioState(audioState);
       });
 
-      // Notify main when we close so it can restore inline UI
-      window.addEventListener('pagehide', () => {
+      // Notify main when we close so it can restore inline UI.
+      // Also clean up any cross-window overlays (transform / crop boxes that
+      // live in main's DOM) — without this they'd persist as orphan canvases
+      // because the popout's JS context is destroyed on unload.
+      const _onPopoutUnload = () => {
+        const viz = this.visualizers.liquidShow;
+        if (viz) {
+          try { viz._deactivateTransformMode?.(); } catch (e) {}
+          try { viz._deactivateCropMode?.();      } catch (e) {}
+          // Defensive: explicitly remove the overlay canvas refs from main's DOM
+          try { viz._removeTransformOverlay?.(); } catch (e) {}
+          try { viz._removeCropOverlay?.();      } catch (e) {}
+        }
         this.popoutSync.send('closing');
-      });
+      };
+      window.addEventListener('pagehide',     _onPopoutUnload);
+      window.addEventListener('beforeunload', _onPopoutUnload);
     } else {
       // Main-side: respond to popout's state request
       this.popoutSync.on('request-state', () => {
@@ -1834,9 +1854,16 @@ class App {
         this._broadcastAudioState();
       });
 
-      // Popout closed (graceful) → restore inline panel
+      // Popout closed (graceful) → restore inline panel.
+      // Also sweep up any orphan overlay canvases the popout viz created in
+      // our canvas container but never got the chance to clean up (e.g. if
+      // the user closed the popout while Transform / Crop mode was active).
       this.popoutSync.on('closing', () => {
         this._exitPoppedOutLayout();
+        const container = this.canvas?.parentElement;
+        if (container) {
+          container.querySelectorAll('.ll-popout-overlay').forEach(el => el.remove());
+        }
       });
 
       // Audio actions from popout
