@@ -2158,6 +2158,19 @@ html, body {
   background: #f8e4d4 !important;
 }
 
+/* Bounce button active state (live animation = green) */
+.ll-toggle.ll-bounce-btn.active {
+  background: #e8fce8 !important;
+  border-top-color: #90c890 !important;
+  border-left-color: #90c890 !important;
+  border-right-color: #409040 !important;
+  border-bottom-color: #409040 !important;
+  color: #1a501a !important;
+}
+.ll-toggle.ll-bounce-btn.active:hover {
+  background: #d4f8d4 !important;
+}
+
 .ll-image-row {
   display: flex;
   align-items: center;

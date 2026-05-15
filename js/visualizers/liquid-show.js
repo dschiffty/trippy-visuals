@@ -313,6 +313,10 @@ export class LiquidShowVisualizer {
     this._cropAspectLock      = null; // null = free, or W/H number (pixel ratio)
     this._cropTmpCanvas       = null; // scratch canvas for compositing crop clip
     this._cropHostWindow      = null; // host window (opener in popout mode)
+
+    // Bounce physics
+    this._lastDrawTime   = undefined; // wall-clock time of last draw() call (seconds)
+    this._bounceFtCanvas = null;      // scratch canvas for per-layer edge-flash overlay
   }
 
   // --- Layer Creation ---
@@ -352,6 +356,20 @@ export class LiquidShowVisualizer {
       // Non-destructive crop: { x1, y1, x2, y2 } in 0-1 normalised canvas coords,
       // or null (= no crop).  Only meaningful for image/webcam layer types.
       crop: null,
+      // Bounce physics (image/webcam only): DVD-screensaver style position animation.
+      // null for non-content layers; always initialised for content layers.
+      bounce: CONTENT_LAYER_TYPES.has(type || 'wash') ? {
+        active:    false,  // is bouncing?
+        x:         0,      // current transform offset X (normalised, same units as transform.x)
+        y:         0,      // current transform offset Y
+        speed:     0.25,   // base speed in canvas-widths per second
+        audioSync: true,   // audio level boosts speed
+        flash:     true,   // brief color flash on edge contact
+        _bvx:      0,      // direction unit-vector X (lazy-inited in _updateBounce)
+        _bvy:      0,      // direction unit-vector Y
+        _flashTimer: 0,    // remaining flash duration (seconds)
+        _flashColor: '#ffffff', // current flash hue (re-randomized each bounce)
+      } : null,
       // Mask system: array of shapes (rect/ellipse/freehand) in normalized 0-1 coords.
       // Stored as array to allow future multi-mask support without data migration.
       _masks: [],
@@ -410,6 +428,10 @@ export class LiquidShowVisualizer {
         maskFeather: (l._maskFeather ?? 0) > 0 ? l._maskFeather : undefined,
         transform: l.transform ? { ...l.transform } : undefined,
         crop: CONTENT_LAYER_TYPES.has(l.type) && l.crop ? { ...l.crop } : undefined,
+        bounce: CONTENT_LAYER_TYPES.has(l.type) && l.bounce ? {
+          active: l.bounce.active, x: l.bounce.x, y: l.bounce.y,
+          speed: l.bounce.speed, audioSync: l.bounce.audioSync, flash: l.bounce.flash,
+        } : undefined,
       })),
       selectedLayerIndex: this.selectedLayerIndex,
       soloLayerIndex: this.soloLayerIndex,
@@ -526,6 +548,19 @@ export class LiquidShowVisualizer {
           };
         } else {
           layer.crop = null;
+        }
+        // Restore bounce (image/webcam only)
+        if (CONTENT_LAYER_TYPES.has(saved.type)) {
+          const sb = saved.bounce;
+          layer.bounce = {
+            active:    sb?.active    ?? false,
+            x:         sb?.x         ?? 0,
+            y:         sb?.y         ?? 0,
+            speed:     sb?.speed     ?? 0.25,
+            audioSync: sb?.audioSync ?? true,
+            flash:     sb?.flash     ?? true,
+            _bvx: 0, _bvy: 0, _flashTimer: 0, _flashColor: '#ffffff',
+          };
         }
         return layer;
       });
@@ -3485,6 +3520,13 @@ export class LiquidShowVisualizer {
 
     const time = performance.now() / 1000 - this.startTime;
     const globalTime = time * this.globals.speed;
+
+    // Wall-clock delta-time for physics (bounce, etc.) — clamped to 100 ms to
+    // prevent large jumps after tab sleep or lag spikes.
+    const _wallNow = time + this.startTime;
+    const dt = this._lastDrawTime !== undefined
+      ? Math.min(0.1, _wallNow - this._lastDrawTime) : 0.016;
+    this._lastDrawTime = _wallNow;
     const audio = this._computeAudio(frequencyData);
     this._timeDomainData = timeDomainData;
 
@@ -3516,6 +3558,10 @@ export class LiquidShowVisualizer {
       }
 
       const audioLevel = this._getAudioForLayer(layer, audio) * this.globals.audioGain;
+      // Update bounce physics before rendering (drives transform.x/y this frame)
+      if (CONTENT_LAYER_TYPES.has(layer.type) && layer.bounce?.active) {
+        this._updateBounce(layer, dt, audioLevel);
+      }
       const t0 = performance.now();
       this._renderLayer(layer, lCanvas, globalTime, audioLevel);
       timing.layers.push({ index: i + 1, type: layer.type, ms: performance.now() - t0 });
@@ -3639,6 +3685,26 @@ export class LiquidShowVisualizer {
         ctCtx.drawImage(srcCanvas, 0, 0, w, h);
         ctCtx.restore();
         srcCanvas = ctc;
+      }
+
+      // Bounce edge-flash: tint the layer's visible pixels for a brief moment
+      // after each wall reflection.  Uses source-atop so only opaque pixels
+      // inside the layer receive the color overlay (no bleed into empty canvas).
+      const _fl = _isContentLayer ? layer.bounce : null;
+      if (_fl && _fl.flash && _fl._flashTimer > 0) {
+        if (!this._bounceFtCanvas) this._bounceFtCanvas = document.createElement('canvas');
+        const ftc = this._bounceFtCanvas;
+        if (ftc.width !== w || ftc.height !== h) { ftc.width = w; ftc.height = h; }
+        const ftCtx = ftc.getContext('2d');
+        ftCtx.clearRect(0, 0, w, h);
+        ftCtx.drawImage(srcCanvas, 0, 0, w, h);
+        ftCtx.globalCompositeOperation = 'source-atop';
+        ftCtx.globalAlpha = Math.min(1, _fl._flashTimer / 0.25) * 0.45;
+        ftCtx.fillStyle = _fl._flashColor;
+        ftCtx.fillRect(0, 0, w, h);
+        ftCtx.globalAlpha = 1;
+        ftCtx.globalCompositeOperation = 'source-over';
+        srcCanvas = ftc;
       }
 
       const hasMask = this._layerHasActiveMask(layer);
@@ -4205,6 +4271,84 @@ export class LiquidShowVisualizer {
 
   // --- Undo/Redo History ---
 
+  // --- Bounce Physics ---
+
+  /**
+   * Advance the DVD-screensaver bounce for one frame.
+   *
+   * Design:
+   *  - Position (b.x, b.y) uses the same normalised-canvas units as transform.x/y:
+   *    0 = centred, ±0.5 = half canvas width from centre.
+   *  - The bounce room in each axis is determined by how much smaller the layer is
+   *    than the canvas.  At scaleX=0.5 the layer occupies half the canvas width, so
+   *    the centre can travel ±0.25 before the image edge touches the canvas edge.
+   *  - Speed is expressed in canvas-widths per second so it feels consistent across
+   *    different canvas sizes.
+   *  - On each wall hit the sign of the corresponding direction component is flipped
+   *    (instant reflection, no energy loss — like a real DVD logo).
+   *  - If audioSync is enabled, the effective speed is boosted proportionally to the
+   *    layer's audio level (up to 3× at full signal).
+   *  - The updated position is written into layer.transform.x/y so the standard
+   *    compositing path and the transform overlay both see the live position.
+   */
+  _updateBounce(layer, dt, audioLevel) {
+    const b = layer.bounce;
+    if (!b || !b.active) return;
+    const t = layer.transform;
+    const sx = Math.abs(t.scaleX);
+    const sy = Math.abs(t.scaleY);
+
+    // Half-extents: how far the centre can move before an edge hits the canvas wall.
+    const xH = Math.max(0, (1 - sx) / 2);
+    const yH = Math.max(0, (1 - sy) / 2);
+
+    // Speed: base + audio boost (up to 3× at audioLevel = 1)
+    const spd = b.speed * (1 + (b.audioSync ? audioLevel * 2.0 : 0));
+
+    // Lazy-init direction to a random angle (not exactly 45° to avoid corner lock)
+    if (b._bvx === 0 && b._bvy === 0) {
+      const angle = (0.3 + Math.random() * 0.8) * Math.PI; // bias away from axes
+      b._bvx = Math.cos(angle);
+      b._bvy = Math.sin(angle);
+      // Normalise (cos² + sin² = 1 already, but be safe)
+      const len = Math.hypot(b._bvx, b._bvy);
+      if (len > 0) { b._bvx /= len; b._bvy /= len; }
+    }
+
+    // Advance position
+    let nx = b.x + b._bvx * spd * dt;
+    let ny = b.y + b._bvy * spd * dt;
+    let bounced = false;
+
+    // Reflect off x walls (or pin to centre when layer fills the canvas in x)
+    if (xH > 0.0005) {
+      if (nx > xH)  { nx = 2 * xH  - nx; b._bvx = -Math.abs(b._bvx); bounced = true; }
+      else if (nx < -xH) { nx = -2 * xH - nx; b._bvx =  Math.abs(b._bvx); bounced = true; }
+    } else { nx = 0; }
+
+    // Reflect off y walls
+    if (yH > 0.0005) {
+      if (ny > yH)  { ny = 2 * yH  - ny; b._bvy = -Math.abs(b._bvy); bounced = true; }
+      else if (ny < -yH) { ny = -2 * yH - ny; b._bvy =  Math.abs(b._bvy); bounced = true; }
+    } else { ny = 0; }
+
+    // Clamp to valid range (safety net for large dt spikes)
+    b.x = Math.max(-Math.max(xH, 0.5), Math.min(Math.max(xH, 0.5), nx));
+    b.y = Math.max(-Math.max(yH, 0.5), Math.min(Math.max(yH, 0.5), ny));
+
+    // Write into transform so compositing + overlay always see live position
+    t.x = b.x;
+    t.y = b.y;
+
+    // Flash on wall contact
+    if (bounced && b.flash) {
+      b._flashTimer = 0.28;
+      b._flashColor = `hsl(${(Math.random() * 360) | 0},100%,65%)`;
+    }
+    // Decay flash timer
+    if (b._flashTimer > 0) b._flashTimer = Math.max(0, b._flashTimer - dt);
+  }
+
   _snapshotState() {
     // Lightweight serializable snapshot of all mutable state
     return JSON.stringify({
@@ -4247,6 +4391,10 @@ export class LiquidShowVisualizer {
         maskFeather: (l._maskFeather ?? 0) > 0 ? l._maskFeather : undefined,
         transform: l.transform ? { ...l.transform } : undefined,
         crop: CONTENT_LAYER_TYPES.has(l.type) && l.crop ? { ...l.crop } : undefined,
+        bounce: CONTENT_LAYER_TYPES.has(l.type) && l.bounce ? {
+          active: l.bounce.active, x: l.bounce.x, y: l.bounce.y,
+          speed: l.bounce.speed, audioSync: l.bounce.audioSync, flash: l.bounce.flash,
+        } : undefined,
       })),
       selectedLayerIndex: this.selectedLayerIndex,
       selectedLayerIndices: [...this.selectedLayerIndices],
@@ -4453,6 +4601,19 @@ export class LiquidShowVisualizer {
       } else {
         layer.crop = null;
       }
+      // Restore bounce (image/webcam only)
+      if (CONTENT_LAYER_TYPES.has(saved.type)) {
+        const sb = saved.bounce;
+        layer.bounce = {
+          active:    sb?.active    ?? false,
+          x:         sb?.x         ?? 0,
+          y:         sb?.y         ?? 0,
+          speed:     sb?.speed     ?? 0.25,
+          audioSync: sb?.audioSync ?? true,
+          flash:     sb?.flash     ?? true,
+          _bvx: 0, _bvy: 0, _flashTimer: 0, _flashColor: '#ffffff',
+        };
+      }
       return layer;
     });
 
@@ -4640,6 +4801,15 @@ export class LiquidShowVisualizer {
         layer._strikes = null;
         layer._lightNextTime = undefined;
         layer._lightLastBeatTime = undefined;
+        // Ensure bounce object exists for content layers, remove for others
+        if (CONTENT_LAYER_TYPES.has(layer.type)) {
+          if (!layer.bounce) {
+            layer.bounce = { active: false, x: 0, y: 0, speed: 0.25, audioSync: true,
+                             flash: true, _bvx: 0, _bvy: 0, _flashTimer: 0, _flashColor: '#ffffff' };
+          }
+        } else {
+          layer.bounce = null;
+        }
         this._rebuildLayerList();
         this._rebuildLayerKnobs();
         // Auto-start webcam if switching to webcam and camera permission is
@@ -4773,6 +4943,13 @@ export class LiquidShowVisualizer {
         const newType = sel.value;
         if (!newType) return;
         layer.type = newType;
+        // Ensure bounce state exists for content layer types
+        if (CONTENT_LAYER_TYPES.has(newType) && !layer.bounce) {
+          layer.bounce = { active: false, x: 0, y: 0, speed: 0.25, audioSync: true,
+                           flash: true, _bvx: 0, _bvy: 0, _flashTimer: 0, _flashColor: '#ffffff' };
+        } else if (!CONTENT_LAYER_TYPES.has(newType)) {
+          layer.bounce = null;
+        }
         this._rebuildLayerList();
         this._rebuildLayerKnobs();
         this._pushHistory();
@@ -5981,7 +6158,105 @@ export class LiquidShowVisualizer {
         maskRow.appendChild(cropBtn);
       }
 
+      // Bounce toggle — image and webcam only
+      if (CONTENT_LAYER_TYPES.has(layer.type) && layer.bounce) {
+        const isBouncing = layer.bounce.active;
+        const bounceBtn = document.createElement('button');
+        bounceBtn.className = 'll-toggle ll-bounce-btn' + (isBouncing ? ' active' : '');
+        bounceBtn.innerHTML = '↗ Bounce';
+        bounceBtn.title = isBouncing
+          ? 'Stop bounce — layer stays at current position'
+          : 'DVD screensaver-style bounce. Use Transform to scale the layer smaller than the canvas so it has room to move.';
+        bounceBtn.style.cssText = 'padding:4px 8px;font-size:10px;flex-shrink:0;white-space:nowrap;';
+        bounceBtn.addEventListener('click', () => {
+          if (this._isLayerLocked(this.selectedLayerIndex)) return;
+          if (!layer.bounce) return;
+          layer.bounce.active = !layer.bounce.active;
+          if (layer.bounce.active) {
+            // Start from current transform position; re-init velocity direction
+            layer.bounce.x = layer.transform.x;
+            layer.bounce.y = layer.transform.y;
+            layer.bounce._bvx = 0;
+            layer.bounce._bvy = 0;
+          }
+          this._rebuildLayerKnobs();
+          this._pushHistory();
+        });
+        this._bounceBtn = bounceBtn;
+        maskRow.appendChild(bounceBtn);
+      }
+
       container.appendChild(maskRow);
+
+      // Bounce settings row (always shown for content layers so speed is always accessible)
+      if (CONTENT_LAYER_TYPES.has(layer.type) && layer.bounce && !isMulti) {
+        const b = layer.bounce;
+        const bounceLabelCss = 'font-size:9px;font-weight:bold;color:#000;white-space:nowrap;';
+
+        // Speed slider row
+        const bSpeedRow = document.createElement('div');
+        bSpeedRow.className = 'll-image-row';
+        bSpeedRow.style.gap = '6px';
+        const bSpeedLabel = document.createElement('span');
+        bSpeedLabel.style.cssText = bounceLabelCss;
+        bSpeedLabel.textContent = 'Bounce Speed:';
+        bSpeedRow.appendChild(bSpeedLabel);
+        const bSpeedSlider = document.createElement('input');
+        bSpeedSlider.type = 'range';
+        bSpeedSlider.className = 'll-row-slider';
+        bSpeedSlider.min = '0.02'; bSpeedSlider.max = '1.0'; bSpeedSlider.step = '0.01';
+        bSpeedSlider.value = String(b.speed);
+        const bSpeedVal = document.createElement('span');
+        bSpeedVal.style.cssText = 'font-size:10px;color:#aaa;min-width:28px;text-align:right;';
+        bSpeedVal.textContent = Number(bSpeedSlider.value).toFixed(2);
+        bSpeedSlider.addEventListener('input', () => {
+          if (this._isLayerLocked(this.selectedLayerIndex)) return;
+          b.speed = parseFloat(bSpeedSlider.value);
+          bSpeedVal.textContent = b.speed.toFixed(2);
+          this._pushHistory();
+        });
+        bSpeedRow.appendChild(bSpeedSlider);
+        bSpeedRow.appendChild(bSpeedVal);
+        container.appendChild(bSpeedRow);
+
+        // Audio Sync + Flash toggles row
+        const bToggleRow = document.createElement('div');
+        bToggleRow.className = 'll-image-row';
+        bToggleRow.style.cssText = 'gap:4px;flex-wrap:wrap;';
+
+        const bAudioLabel = document.createElement('span');
+        bAudioLabel.style.cssText = bounceLabelCss + 'margin-right:2px;';
+        bAudioLabel.textContent = 'Bounce:';
+        bToggleRow.appendChild(bAudioLabel);
+
+        const bAudioBtn = document.createElement('button');
+        bAudioBtn.className = 'll-toggle' + (b.audioSync ? ' active' : '');
+        bAudioBtn.textContent = '♪ Audio Sync';
+        bAudioBtn.title = 'Speed up on audio peaks';
+        bAudioBtn.style.cssText = 'padding:2px 6px;font-size:9px;';
+        bAudioBtn.addEventListener('click', () => {
+          if (this._isLayerLocked(this.selectedLayerIndex)) return;
+          b.audioSync = !b.audioSync;
+          bAudioBtn.classList.toggle('active', b.audioSync);
+          this._pushHistory();
+        });
+        bToggleRow.appendChild(bAudioBtn);
+
+        const bFlashBtn = document.createElement('button');
+        bFlashBtn.className = 'll-toggle' + (b.flash ? ' active' : '');
+        bFlashBtn.textContent = '✦ Edge Flash';
+        bFlashBtn.title = 'Brief color flash when hitting an edge';
+        bFlashBtn.style.cssText = 'padding:2px 6px;font-size:9px;';
+        bFlashBtn.addEventListener('click', () => {
+          if (this._isLayerLocked(this.selectedLayerIndex)) return;
+          b.flash = !b.flash;
+          bFlashBtn.classList.toggle('active', b.flash);
+          this._pushHistory();
+        });
+        bToggleRow.appendChild(bFlashBtn);
+
+        container.appendChild(bToggleRow);
+      }
     }
 
     // Toolbar: Randomize + Randomize All + Dynamic
@@ -6129,6 +6404,11 @@ export class LiquidShowVisualizer {
           tgt._spinSpeed = 0;
           tgt._spinDir   = 'cw';
           tgt._spinAngle = undefined;
+        }
+        // Reset bounce (content layers only)
+        if (CONTENT_LAYER_TYPES.has(tgt.type)) {
+          tgt.bounce = { active: false, x: 0, y: 0, speed: 0.25, audioSync: true, flash: true,
+                         _bvx: 0, _bvy: 0, _flashTimer: 0, _flashColor: '#ffffff' };
         }
         // Reset transform to identity
         tgt.transform = { x: 0, y: 0, scaleX: 1, scaleY: 1 };
@@ -6582,6 +6862,20 @@ export class LiquidShowVisualizer {
       layer._spinDir   = Math.random() < 0.5 ? 'cw' : 'ccw';
       layer._spinAngle = 0;
     }
+    // Bounce: ensure object exists for content layers, null for others
+    if (CONTENT_LAYER_TYPES.has(newType)) {
+      if (!layer.bounce) {
+        layer.bounce = { active: false, x: 0, y: 0, speed: 0.25, audioSync: true, flash: true,
+                         _bvx: 0, _bvy: 0, _flashTimer: 0, _flashColor: '#ffffff' };
+      }
+      // 25% chance of bounce with a random speed
+      layer.bounce.active    = Math.random() < 0.25;
+      layer.bounce.speed     = parseFloat((0.08 + Math.random() * 0.42).toFixed(2));
+      layer.bounce.x = 0; layer.bounce.y = 0;
+      layer.bounce._bvx = 0; layer.bounce._bvy = 0; layer.bounce._flashTimer = 0;
+    } else {
+      layer.bounce = null;
+    }
     this._randomizeLayerParams(layer);
     // 30% chance of multicolor for stars (must run after _randomizeLayerParams sets hue)
     if (newType === 'stars' && Math.random() < 0.3) {
@@ -6652,6 +6946,19 @@ export class LiquidShowVisualizer {
         layer._savedHue = layer.hue;
         layer.hue = 365;
       }
+      // Bounce: ensure object exists for content layers, null for others
+      if (CONTENT_LAYER_TYPES.has(newType)) {
+        if (!layer.bounce) {
+          layer.bounce = { active: false, x: 0, y: 0, speed: 0.25, audioSync: true, flash: true,
+                           _bvx: 0, _bvy: 0, _flashTimer: 0, _flashColor: '#ffffff' };
+        }
+        layer.bounce.active = Math.random() < 0.25;
+        layer.bounce.speed  = parseFloat((0.08 + Math.random() * 0.42).toFixed(2));
+        layer.bounce.x = 0; layer.bounce.y = 0;
+        layer.bounce._bvx = 0; layer.bounce._bvy = 0; layer.bounce._flashTimer = 0;
+      } else {
+        layer.bounce = null;
+      }
     });
 
     // Randomize global params too
@@ -6714,6 +7021,19 @@ export class LiquidShowVisualizer {
       if (newType === 'stars' && Math.random() < 0.3) {
         layer._savedHue = layer.hue;
         layer.hue = 365;
+      }
+      // Bounce: ensure object exists for content layers, null for others
+      if (CONTENT_LAYER_TYPES.has(newType)) {
+        if (!layer.bounce) {
+          layer.bounce = { active: false, x: 0, y: 0, speed: 0.25, audioSync: true, flash: true,
+                           _bvx: 0, _bvy: 0, _flashTimer: 0, _flashColor: '#ffffff' };
+        }
+        layer.bounce.active = Math.random() < 0.25;
+        layer.bounce.speed  = parseFloat((0.08 + Math.random() * 0.42).toFixed(2));
+        layer.bounce.x = 0; layer.bounce.y = 0;
+        layer.bounce._bvx = 0; layer.bounce._bvy = 0; layer.bounce._flashTimer = 0;
+      } else {
+        layer.bounce = null;
       }
     });
 
