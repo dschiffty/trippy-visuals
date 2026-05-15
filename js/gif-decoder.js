@@ -67,17 +67,17 @@ export function decodeGif(arrayBuffer) {
   const globalCT   = gctFlag ? readColorTable(gctSize) : null;
 
   // ── Compositing state ─────────────────────────────────────────────────────
+  // Single compositing canvas — reused for all frames.
+  // Snapshots are stored as ImageData (CPU heap) to avoid Chrome dropping
+  // off-screen canvas GPU textures under memory pressure.
   const compCanvas = document.createElement('canvas');
   compCanvas.width  = width;
   compCanvas.height = height;
   const compCtx = compCanvas.getContext('2d');
   compCtx.clearRect(0, 0, width, height);
 
-  // Saved canvas for disposal method 3 (restore to previous)
-  const prevCanvas = document.createElement('canvas');
-  prevCanvas.width  = width;
-  prevCanvas.height = height;
-  const prevCtx = prevCanvas.getContext('2d');
+  // Saved ImageData for disposal method 3 (restore to previous)
+  let prevImageData = null;
 
   // ── GCE defaults for each frame ───────────────────────────────────────────
   let gceDelay    = 100;   // ms
@@ -153,8 +153,7 @@ export function decodeGif(arrayBuffer) {
 
       // ── Save state before compositing (disposal 3) ──────────────────────
       if (gceDisposal === 3) {
-        prevCtx.clearRect(0, 0, width, height);
-        prevCtx.drawImage(compCanvas, 0, 0);
+        prevImageData = compCtx.getImageData(0, 0, width, height);
       }
 
       // ── Build this frame's pixels onto a temp canvas ─────────────────────
@@ -186,13 +185,13 @@ export function decodeGif(arrayBuffer) {
       // ── Blit onto composite ───────────────────────────────────────────────
       compCtx.drawImage(tmpCanvas, imgLeft, imgTop);
 
-      // ── Snapshot the composited frame ─────────────────────────────────────
-      const snap = document.createElement('canvas');
-      snap.width  = width;
-      snap.height = height;
-      snap.getContext('2d').drawImage(compCanvas, 0, 0);
+      // ── Snapshot the composited frame as ImageData (CPU heap) ────────────
+      // Storing as ImageData rather than a canvas element avoids Chrome
+      // silently dropping the GPU texture backing of off-screen canvases,
+      // which would cause drawImage() to produce empty pixels.
+      const snapData = compCtx.getImageData(0, 0, width, height);
 
-      frames.push({ canvas: snap, delay: gceDelay });
+      frames.push({ imageData: snapData, width, height, delay: gceDelay });
 
       // ── Apply disposal for next frame ────────────────────────────────────
       if (gceDisposal === 2) {
@@ -203,10 +202,9 @@ export function decodeGif(arrayBuffer) {
           compCtx.fillStyle = `rgb(${globalCT[p]},${globalCT[p+1]},${globalCT[p+2]})`;
           compCtx.fillRect(imgLeft, imgTop, imgW, imgH);
         }
-      } else if (gceDisposal === 3) {
+      } else if (gceDisposal === 3 && prevImageData) {
         // Restore to previous state
-        compCtx.clearRect(0, 0, width, height);
-        compCtx.drawImage(prevCanvas, 0, 0);
+        compCtx.putImageData(prevImageData, 0, 0);
       }
       // disposal 0/1: leave composite as-is
 

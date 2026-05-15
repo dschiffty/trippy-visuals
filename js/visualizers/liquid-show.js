@@ -927,18 +927,24 @@ export class LiquidShowVisualizer {
         layer._imgPixels    = null;
         layer._panAccCanvas = null;
 
-        // Set layer.imageData synchronously from the first frame's canvas so the
-        // existing `if (!hasSource)` guard and getState() work correctly.
-        // Using a canvas directly as layer.imageData is not ideal for getState (it
-        // wants .src), so we also kick off an async Image load for that.
-        layer.imageData = frames[0].canvas; // allow rendering immediately
+        // Build a preview canvas from the first frame's ImageData so we can
+        // generate a data URL for the thumbnail and for layer.imageData.
+        const f0 = frames[0];
+        const previewCanvas = document.createElement('canvas');
+        previewCanvas.width  = f0.width;
+        previewCanvas.height = f0.height;
+        previewCanvas.getContext('2d').putImageData(f0.imageData, 0, 0);
+        const previewDataUrl = previewCanvas.toDataURL();
+
+        // Set layer.imageData immediately so hasSource check passes.
+        layer.imageData = previewCanvas; // synchronous — canvas is a valid drawImage source
         const previewImg = new Image();
         previewImg.onload = () => { layer.imageData = previewImg; }; // upgrade to Image with .src
-        previewImg.src = frames[0].canvas.toDataURL();
+        previewImg.src = previewDataUrl;
 
         if (uploadBtn) uploadBtn.textContent = '\u{1F5BC} Change';
         if (imgPreview) {
-          imgPreview.src = frames[0].canvas.toDataURL();
+          imgPreview.src = previewDataUrl;
           imgPreview.style.display = 'block';
         }
         if (gifControls) gifControls.style.display = layer._gifIsAnimated ? '' : 'none';
@@ -1047,26 +1053,46 @@ export class LiquidShowVisualizer {
       layer._imgCanvas.width = bw;
       layer._imgCanvas.height = bh;
       const ic = layer._imgCanvas.getContext('2d');
-      // Cover-fit the image
+      // Cover-fit the source into _imgCanvas (bw × bh).
+      // GIF frames are stored as ImageData (CPU heap) to avoid Chrome silently
+      // dropping off-screen canvas GPU textures. We materialise a temporary
+      // canvas from the ImageData only here, use it once, then discard it.
       const isGifSource = layer._gifFrames && layer._gifFrames.length > 0;
-      const img = isGifSource
-        ? layer._gifFrames[layer._gifFrameIndex].canvas
-        : layer.imageData;
+      let imgW, imgH;
 
-      const imgW = img.width;
-      const imgH = img.height;
-      if (imgW > 0 && imgH > 0) {
-        const imgAspect = imgW / imgH;
-        const bufAspect = bw / bh;
-        let sx = 0, sy = 0, sw = imgW, sh = imgH;
-        if (imgAspect > bufAspect) {
-          sw = imgH * bufAspect;
-          sx = (imgW - sw) / 2;
-        } else {
-          sh = imgW / bufAspect;
-          sy = (imgH - sh) / 2;
+      if (isGifSource) {
+        const frame = layer._gifFrames[layer._gifFrameIndex];
+        imgW = frame.width;
+        imgH = frame.height;
+        if (imgW > 0 && imgH > 0) {
+          // Reuse a single scratch canvas sized to the GIF's logical screen
+          if (!layer._gifTmpCanvas ||
+              layer._gifTmpCanvas.width  !== imgW ||
+              layer._gifTmpCanvas.height !== imgH) {
+            layer._gifTmpCanvas = document.createElement('canvas');
+            layer._gifTmpCanvas.width  = imgW;
+            layer._gifTmpCanvas.height = imgH;
+          }
+          layer._gifTmpCanvas.getContext('2d').putImageData(frame.imageData, 0, 0);
+          const imgAspect = imgW / imgH;
+          const bufAspect = bw / bh;
+          let sx = 0, sy = 0, sw = imgW, sh = imgH;
+          if (imgAspect > bufAspect) { sw = imgH * bufAspect; sx = (imgW - sw) / 2; }
+          else                       { sh = imgW / bufAspect; sy = (imgH - sh) / 2; }
+          ic.drawImage(layer._gifTmpCanvas, sx, sy, sw, sh, 0, 0, bw, bh);
         }
-        ic.drawImage(img, sx, sy, sw, sh, 0, 0, bw, bh);
+      } else {
+        const img = layer.imageData;
+        imgW = img.width;
+        imgH = img.height;
+        if (imgW > 0 && imgH > 0) {
+          const imgAspect = imgW / imgH;
+          const bufAspect = bw / bh;
+          let sx = 0, sy = 0, sw = imgW, sh = imgH;
+          if (imgAspect > bufAspect) { sw = imgH * bufAspect; sx = (imgW - sw) / 2; }
+          else                       { sh = imgW / bufAspect; sy = (imgH - sh) / 2; }
+          ic.drawImage(img, sx, sy, sw, sh, 0, 0, bw, bh);
+        }
       }
       layer._imgPixels = ic.getImageData(0, 0, bw, bh).data;
     }
