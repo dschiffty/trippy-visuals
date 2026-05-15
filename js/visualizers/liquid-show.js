@@ -4343,6 +4343,7 @@ export class LiquidShowVisualizer {
         eye.classList.toggle('active', layer.visible);
         row.classList.toggle('muted', !layer.visible);
         eye.textContent = layer.visible ? '\u{1F441}' : '\u2014';
+        this._pushHistory(); // sync visibility change to other window via popoutSync
       });
 
       // Solo toggle
@@ -4354,6 +4355,7 @@ export class LiquidShowVisualizer {
         e.stopPropagation();
         this.soloLayerIndex = this.soloLayerIndex === i ? -1 : i;
         this._rebuildLayerList();
+        this._pushHistory(); // sync solo change to other window via popoutSync
       });
 
       // Lock toggle
@@ -4368,6 +4370,7 @@ export class LiquidShowVisualizer {
         lock.textContent = layer.locked ? '\u{1F512}' : '\u{1F513}';
         row.classList.toggle('locked', layer.locked);
         this._rebuildLayerKnobs();
+        this._pushHistory(); // sync lock change to other window via popoutSync
       });
 
       // Audio sync toggle
@@ -4380,6 +4383,7 @@ export class LiquidShowVisualizer {
         if (this._isLayerLocked(i)) return;
         layer.audioSync = !layer.audioSync;
         audioSync.classList.toggle('active', layer.audioSync);
+        this._pushHistory(); // sync audioSync change to other window via popoutSync
       });
 
       // Type selector
@@ -6618,6 +6622,11 @@ export class LiquidShowVisualizer {
       layer.transform.scaleY = 1;
     }
 
+    // Defensive: in popout mode window.opener.__app may not have been available
+    // when buildPanel first called _setupTransformOverlay, so retry here if the
+    // overlay canvas is missing.
+    if (!this._transformOverlayCanvas) this._setupTransformOverlay();
+
     if (this._transformOverlayCanvas) {
       this._transformOverlayCanvas.style.pointerEvents = 'auto';
     }
@@ -6958,18 +6967,23 @@ export class LiquidShowVisualizer {
       if (h.includes('w')) nx1 = x1 + dx;
       if (h.includes('e')) nx2 = x2 + dx;
 
-      // Shift key + corner handle → lock aspect ratio
+      // Shift key + corner handle → lock original aspect ratio.
+      // Same dominance-based approach as _maskApplyResize: compute the
+      // unconstrained new size first, then clamp the smaller-change dimension
+      // to match the AR of the original box.  e.shiftKey is read directly from
+      // the live mousemove event — no separate tracking needed.
       if (e.shiftKey && h.length === 2) {
         const origAR = (x2 - x1) / Math.max(1, y2 - y1);
-        // Project the drag delta onto the handle's diagonal direction
-        const diagX = h.includes('e') ? 1 : -1;
-        const diagY = h.includes('s') ? 1 : -1;
-        const len = Math.hypot(diagX, diagY);
-        const proj = (dx * diagX + dy * diagY) / len;
-        const px = (proj * diagX) / len;
-        const py = (proj * diagY) / len;
-        if (h.includes('e')) nx2 = x2 + px; else nx1 = x1 + px;
-        if (h.includes('s')) ny2 = y2 + py; else ny1 = y1 + py;
+        const newW = nx2 - nx1, newH = ny2 - ny1;
+        if (newW / origAR >= newH) {
+          // Width change dominates — fit height to width
+          const h2 = newW / origAR;
+          if (h.includes('n')) ny1 = ny2 - h2; else ny2 = ny1 + h2;
+        } else {
+          // Height change dominates — fit width to height
+          const w2 = newH * origAR;
+          if (h.includes('w')) nx1 = nx2 - w2; else nx2 = nx1 + w2;
+        }
       }
 
       // Enforce minimum size (20 display px)
