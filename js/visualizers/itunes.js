@@ -759,7 +759,7 @@ export class ITunesVisualizer {
     } else {
       // Fallback: show mode + palette
       this._lcdTitle.textContent = `${MODE_LABELS[this.currentMode]} \u2014 ${PALETTE_LABELS[this.currentPalette]}`;
-      this._lcdArtist.textContent = 'Audio Visualizer';
+      this._lcdArtist.textContent = 'Trippy Visuals';
     }
 
     // Audio level bar
@@ -856,7 +856,7 @@ export class ITunesVisualizer {
 
     const artist = document.createElement('div');
     artist.className = 'itunes-song-artist';
-    artist.textContent = 'Audio Visualizer';
+    artist.textContent = 'Trippy Visuals';
     this._lcdArtist = artist;
 
     songInfo.appendChild(title);

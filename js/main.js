@@ -1485,7 +1485,7 @@ class App {
 
   showAbout() {
     alert(
-      'Audio Visualizer v1.0\n\n' +
+      'Trippy Visuals v1.0\n\n' +
         'A retro-styled audio visualization tool.\n' +
         'Captures system audio via screen sharing.\n\n' +
         'Tip: Double-click a knob to reset it.',
