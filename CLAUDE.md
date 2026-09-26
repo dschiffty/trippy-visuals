@@ -26,3 +26,9 @@
 - Commit frequently with descriptive messages
 - Mobile and desktop must both be tested for any UI or rendering change
 - Never push a change the user hasn't confirmed works in their real browser
+
+## Repo Visibility & Secrets
+
+- This repo is public by choice. The general "every project gets a private GitHub repo" rule does not apply here
+- Never commit secrets (API keys, tokens, passwords, .env files) to this repo. Anything committed here is visible to anyone
+- Commits use the GitHub noreply email (261629996+dschiffty@users.noreply.github.com), not a personal address
