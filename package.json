@@ -9,5 +9,8 @@
   },
   "devDependencies": {
     "vite": "^5.0.0"
+  },
+  "dependencies": {
+    "posthog-js": "^1.434.15"
   }
 }

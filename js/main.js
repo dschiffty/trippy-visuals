@@ -1,3 +1,4 @@
+import './analytics.js';
 import { AudioCapture } from './audio.js';
 import { OscilloscopeVisualizer } from './visualizers/oscilloscope.js';
 import { SpectrumVisualizer } from './visualizers/spectrum.js';
