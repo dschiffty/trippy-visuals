@@ -1,3 +1,4 @@
+import { track } from './analytics.js';
 export class ControlPanel {
   constructor(presetContainer, knobsContainer) {
     this.presetContainer = presetContainer;
@@ -151,6 +152,7 @@ export class ControlPanel {
   }
 
   randomize() {
+    track('randomize_clicked');
     this.knobs.forEach((knobData) => {
       if (knobData.type === 'stepper') {
         const range = knobData.param.max - knobData.param.min;
@@ -177,6 +179,7 @@ export class ControlPanel {
 
   toggleDynamic() {
     this.dynamicEnabled = !this.dynamicEnabled;
+    track('dynamic_mode_toggled', { enabled: this.dynamicEnabled });
     if (this._dynamicBtn) {
       this._dynamicBtn.classList.toggle('active', this.dynamicEnabled);
     }

@@ -5,6 +5,7 @@
 import { GALLERY_IMAGES, getGalleryImage, getGalleryThumbnail } from '../image-gallery.js';
 import { LL_PRESETS } from './ll-presets.js';
 import { decodeGif } from '../gif-decoder.js';
+import { track } from '../analytics.js';
 
 // --- Simplex 2D Noise ---
 const F2 = 0.5 * (Math.sqrt(3) - 1);
@@ -5343,6 +5344,9 @@ export class LiquidShowVisualizer {
       fileInput.addEventListener('change', (e) => {
         const file = e.target.files[0];
         if (!file) return;
+        // File type only, never the file name.
+        const isGif = file.type === 'image/gif' || file.name.toLowerCase().endsWith('.gif');
+        track('image_added', { type: isGif ? 'gif' : 'image' });
         this._loadImageFile(file, layer, uploadBtn, imgPreview, gifControls);
       });
 

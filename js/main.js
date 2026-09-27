@@ -1,4 +1,4 @@
-import './analytics.js';
+import { track } from './analytics.js';
 import { AudioCapture } from './audio.js';
 import { OscilloscopeVisualizer } from './visualizers/oscilloscope.js';
 import { SpectrumVisualizer } from './visualizers/spectrum.js';
@@ -201,6 +201,10 @@ class App {
   }
 
   switchPreset(key) {
+    if (this.activeKey && key !== this.activeKey && !this.isPopout) {
+      track('visualizer_mode_changed', { mode: key, previous_mode: this.activeKey });
+    }
+
     // Switching away from Liquid Lights closes the popout (popout only supports LL).
     if (!this.isPopout && this.activeKey === 'liquidShow' && key !== 'liquidShow' && this.popoutWindow) {
       this.closePopout();
@@ -333,6 +337,7 @@ class App {
 
     if (demoBtn && demoAudio) {
       demoBtn.addEventListener('click', () => {
+        if (demoAudio.paused) track('audio_started', { source: 'demo' });
         demoAudio.paused ? demoAudio.play() : demoAudio.pause();
       });
       demoAudio.addEventListener('play', updateDemoUI);
@@ -354,6 +359,7 @@ class App {
 
     if (demoMiniBtn && demoAudio) {
       demoMiniBtn.addEventListener('click', () => {
+        if (demoAudio.paused) track('audio_started', { source: 'demo' });
         demoAudio.paused ? demoAudio.play() : demoAudio.pause();
       });
     }
@@ -451,6 +457,7 @@ class App {
     try {
       this.statusText.textContent = 'Connecting...';
       await this.audio.start();
+      track('audio_started', { source: 'system' });
       this._updateAudioStatus();
     } catch (err) {
       // User dismissed the screen-share dialogue or denied permission —
@@ -818,6 +825,7 @@ class App {
       this.mic.stream = await navigator.mediaDevices.getUserMedia({
         audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
       });
+      track('audio_started', { source: 'mic' });
       this.mic.context = new (window.AudioContext || window.webkitAudioContext)();
       this.mic.source = this.mic.context.createMediaStreamSource(this.mic.stream);
 
@@ -1414,6 +1422,7 @@ class App {
 
   toggleFullscreen() {
     if (!document.fullscreenElement) {
+      track('fullscreen_entered');
       document.documentElement.requestFullscreen();
     } else {
       document.exitFullscreen();
@@ -1577,6 +1586,7 @@ class App {
       state: this._captureState(),
     });
     this._setConfigs(configs);
+    track('config_saved', { mode: this.activeKey });
     this.statusText.textContent = `Saved: ${name}`;
   }
 
@@ -1603,6 +1613,7 @@ class App {
       row.appendChild(info);
       row.addEventListener('click', () => {
         this._applyState(cfg.state);
+        track('config_loaded', { mode: cfg.state.preset });
         dialog.remove();
         this.statusText.textContent = `Loaded: ${cfg.name}`;
       });
@@ -1682,6 +1693,7 @@ class App {
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
 
+    track('config_exported', { mode: this.activeKey });
     this.statusText.textContent = `Exported: ${data.name}`;
   }
 
@@ -1705,6 +1717,7 @@ class App {
             return;
           }
           this._applyState(data.state);
+          track('config_imported', { mode: data.state.preset });
           this.statusText.textContent = `Imported: ${data.name || file.name}`;
 
           // Also save to localStorage so it shows up in Manage Saved
@@ -1962,6 +1975,7 @@ class App {
       alert('The browser blocked the popout window. Please allow popups for this site.');
       return;
     }
+    track('controls_popped_out');
 
     this._enterPoppedOutLayout();
 
