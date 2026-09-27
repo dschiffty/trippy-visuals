@@ -3,6 +3,64 @@
 
 export const LL_PRESETS = [
   {
+    "id": "oscilloscope",
+    "name": "Oscilloscope",
+    "description": "Classic green oscilloscope trace on a grid (replaces the old Oscilloscope mode)",
+    "vizState": {
+      "layers": [
+        {
+          "type": "scope",
+          "visible": true,
+          "locked": false,
+          "params": {
+            "scale": 1.3,
+            "speed": 0.2,
+            "opacity": 1,
+            "drift": 0,
+            "rotation": 0,
+            "zoom": 1,
+            "mirror": 0,
+            "turbulence": 1,
+            "distortion": 0.4,
+            "fade": 0,
+            "tint": 0,
+            "invert": 0,
+            "brightness": 0,
+            "reactivity": 0.3
+          },
+          "blendMode": "source-over",
+          "audioSource": "full",
+          "audioSync": true,
+          "colorMode": "color",
+          "hue": 135,
+          "offset": { "x": 0, "y": 0 }
+        }
+      ],
+      "selectedLayerIndex": 0,
+      "soloLayerIndex": -1,
+      "globals": {
+        "audioGain": 1,
+        "speed": 0.5,
+        "turbulence": 0.5,
+        "bloom": 0.2,
+        "softness": 0,
+        "contrast": 0.3,
+        "saturation": 0.5,
+        "interaction": 0,
+        "journey": 0,
+        "grain": 0,
+        "grid": 0.5,
+        "crt": 0,
+        "bw": false,
+        "threshold": 0.5,
+        "density": 0.5,
+        "bwGlow": 0.5
+      },
+      "dynamicEnabled": false,
+      "globalLock": false
+    }
+  },
+  {
     "id": "ethereal-layers",
     "name": "Ethereal Layers",
     "description": "Layered images, wash, bubbles and scope with soft interaction",

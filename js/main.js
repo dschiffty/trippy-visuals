@@ -86,6 +86,9 @@ class App {
     const isMobileDevice = /Android|iPhone|iPad|iPod|webOS|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent)
       || (navigator.maxTouchPoints > 1 && window.innerWidth < 1024);
     const defaultKey = this.isPopout ? 'liquidShow' : (isMobileDevice ? 'liquidLite' : 'liquidShow');
+    // Simplified to one mode per device: Liquid Lights on desktop, Liquid Lite on mobile.
+    // The other modes are hidden (not deleted yet); switchPreset() redirects to this key.
+    this.onlyModeKey = defaultKey;
     this.activeKey = defaultKey;
     this.previousKey = null;
     this.activeVisualizer = this.visualizers[defaultKey];
@@ -201,6 +204,8 @@ class App {
   }
 
   switchPreset(key) {
+    if (key !== this.onlyModeKey) key = this.onlyModeKey;
+
     if (this.activeKey && key !== this.activeKey && !this.isPopout) {
       track('visualizer_mode_changed', { mode: key, previous_mode: this.activeKey });
     }
@@ -1354,7 +1359,8 @@ class App {
     const synth = this._generateSyntheticAudio(0);
     const savedViz = this.activeVisualizer;
     const savedKey = this.activeKey;
-    for (const [key, viz] of Object.entries(this.visualizers)) {
+    // Only the one available mode needs warming (the hidden modes are never shown)
+    for (const viz of [this.visualizers[this.onlyModeKey]]) {
       try {
         viz.draw(synth.frequency, synth.timeDomain);
         viz.draw(synth.frequency, synth.timeDomain);

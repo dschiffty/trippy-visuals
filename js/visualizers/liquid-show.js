@@ -157,7 +157,19 @@ const GLOBAL_PARAMS = [
   { key: 'interaction', label: 'Interact', min: 0, max: 1, default: 0.5, step: 0.05, group: 'Animate', tip: 'Mouse / touch reactivity' },
   { key: 'journey', label: 'Journey', min: 0, max: 1, default: 0, step: 0.05, group: 'Animate', tip: 'Auto-evolving parameter drift' },
   { key: 'grain', label: 'Grain', min: 0, max: 1, default: 0, step: 0.05, group: 'Animate', tip: 'Film grain texture overlay' },
+  // Screen — overlays drawn on top of every layer. Never randomized, and reset to 0
+  // when a preset that doesn't set them loads, so they never "stick" unexpectedly.
+  { key: 'grid', label: 'Grid', min: 0, max: 1, default: 0, step: 0.05, group: 'Screen', tip: 'Oscilloscope grid lines over everything', fixed: true },
+  { key: 'crt', label: 'CRT', min: 0, max: 1, default: 0, step: 0.05, group: 'Screen', tip: 'Old TV look: scanlines + darkened edges', fixed: true },
 ];
+
+// The Scope layer reuses the generic knobs; these names describe what they do there.
+const SCOPE_KNOB_LABELS = {
+  scale:      { label: 'Gain',  tip: 'Waveform height' },
+  speed:      { label: 'Sweep', tip: 'How much of the waveform fits on screen' },
+  turbulence: { label: 'Glow',  tip: 'Glow around the trace' },
+  distortion: { label: 'Decay', tip: 'Phosphor trail length' },
+};
 
 const BW_PARAMS = [
   { key: 'threshold', label: 'Thresh', min: 0, max: 1, default: 0.5, step: 0.05, tip: 'Black/white cutoff point' },
@@ -574,6 +586,9 @@ export class LiquidShowVisualizer {
 
     // Restore globals
     if (state.globals) {
+      GLOBAL_PARAMS.forEach(p => {
+        if (p.fixed && state.globals[p.key] === undefined) this.globals[p.key] = p.default;
+      });
       Object.assign(this.globals, state.globals);
     }
 
@@ -4059,6 +4074,69 @@ export class LiquidShowVisualizer {
       ctx.globalCompositeOperation = 'source-over';
       if (post) post.grain = performance.now() - t0;
     }
+
+    // Screen overlays: Grid, then CRT on top. Both are pre-drawn once per canvas
+    // size, so each frame is a single GPU-composited drawImage per overlay.
+    const { grid, crt } = this.globals;
+    if (grid > 0.01) {
+      t0 = performance.now();
+      ctx.globalAlpha = grid;
+      ctx.drawImage(this._getGridOverlay(w, h), 0, 0);
+      ctx.globalAlpha = 1;
+      if (post) post.grid = performance.now() - t0;
+    }
+    if (crt > 0.01) {
+      t0 = performance.now();
+      ctx.globalAlpha = crt;
+      ctx.drawImage(this._getCrtOverlay(w, h), 0, 0);
+      ctx.globalAlpha = 1;
+      if (post) post.crt = performance.now() - t0;
+    }
+  }
+
+  // Oscilloscope graticule: 10×8 minor grid plus a brighter center crosshair.
+  _getGridOverlay(w, h) {
+    const c = this._gridOverlay || (this._gridOverlay = document.createElement('canvas'));
+    if (c.width === w && c.height === h) return c;
+    c.width = w; c.height = h;
+    const g = c.getContext('2d');
+    const line = Math.max(1, Math.round(Math.min(w, h) / 600));
+    g.lineWidth = line;
+    g.strokeStyle = 'rgba(200, 255, 215, 0.22)';
+    g.beginPath();
+    for (let i = 1; i < 10; i++) { const x = Math.round((w * i) / 10) + 0.5; g.moveTo(x, 0); g.lineTo(x, h); }
+    for (let i = 1; i < 8; i++)  { const y = Math.round((h * i) / 8) + 0.5;  g.moveTo(0, y); g.lineTo(w, y); }
+    g.stroke();
+    g.strokeStyle = 'rgba(200, 255, 215, 0.45)';
+    g.beginPath();
+    g.moveTo(Math.round(w / 2) + 0.5, 0); g.lineTo(Math.round(w / 2) + 0.5, h);
+    g.moveTo(0, Math.round(h / 2) + 0.5); g.lineTo(w, Math.round(h / 2) + 0.5);
+    g.stroke();
+    return c;
+  }
+
+  // CRT look: horizontal scanlines, dark vignette edges, faint glass highlight.
+  // (Film grain is the separate Grain knob.)
+  _getCrtOverlay(w, h) {
+    const c = this._crtOverlay || (this._crtOverlay = document.createElement('canvas'));
+    if (c.width === w && c.height === h) return c;
+    c.width = w; c.height = h;
+    const g = c.getContext('2d');
+    const pitch = Math.max(3, Math.round(h / 300)); // scanline spacing scales with resolution
+    g.fillStyle = 'rgba(0, 0, 0, 0.35)';
+    for (let y = 0; y < h; y += pitch) g.fillRect(0, y, w, Math.ceil(pitch / 3));
+    const m = Math.min(w, h);
+    const vignette = g.createRadialGradient(w / 2, h / 2, m * 0.35, w / 2, h / 2, Math.hypot(w, h) * 0.55);
+    vignette.addColorStop(0, 'rgba(0, 0, 0, 0)');
+    vignette.addColorStop(1, 'rgba(0, 0, 0, 0.75)');
+    g.fillStyle = vignette;
+    g.fillRect(0, 0, w, h);
+    const shine = g.createRadialGradient(w * 0.35, h * 0.3, 0, w * 0.5, h * 0.5, m * 0.6);
+    shine.addColorStop(0, 'rgba(255, 255, 255, 0.06)');
+    shine.addColorStop(1, 'rgba(255, 255, 255, 0)');
+    g.fillStyle = shine;
+    g.fillRect(0, 0, w, h);
+    return c;
   }
 
   reset() {
@@ -5149,7 +5227,8 @@ export class LiquidShowVisualizer {
     // Build knobs with group labels
     const allParams = [
       { ...{ key: 'hue', label: 'Hue', min: 0, max: 360, default: 180, step: 1, group: 'Core', tip: 'Base color of the layer' }, _isHue: true },
-      ...LAYER_PARAMS,
+      ...LAYER_PARAMS.map(p => (layer.type === 'scope' && !isMulti && SCOPE_KNOB_LABELS[p.key])
+        ? { ...p, ...SCOPE_KNOB_LABELS[p.key] } : p),
     ];
 
     let lastGroup = null;
@@ -7199,6 +7278,7 @@ export class LiquidShowVisualizer {
 
     // Randomize global params too
     GLOBAL_PARAMS.forEach(p => {
+      if (p.fixed) return;
       this.globals[p.key] = p.min + Math.random() * (p.max - p.min);
       this.globals[p.key] = Math.round(this.globals[p.key] / p.step) * p.step;
       this.globals[p.key] = Math.max(p.min, Math.min(p.max, this.globals[p.key]));
@@ -7305,6 +7385,7 @@ export class LiquidShowVisualizer {
     // Initialize or clear dynamic state on all panel knobs
     const allKnobs = [...this._panelKnobs, ...this._globalKnobs, ...this._bwKnobs];
     allKnobs.forEach(k => {
+      if (k.param.fixed) return; // Screen overlays (Grid/CRT) stay put
       if (this._dynamicEnabled) {
         k.dynamic = true;
         k.baseValue = k.value;

@@ -47,7 +47,8 @@
           <div class="menu-option" id="fullscreen">Fullscreen</div>
         </div>
       </div>
-      <div class="menu-item">
+      <!-- Mode switching is hidden: the app is Liquid Lights only (Liquid Lite on mobile). -->
+      <div class="menu-item" style="display:none">
         <span class="menu-label"><u>P</u>resets</span>
         <div class="menu-dropdown">
           <div class="menu-option preset-menu" data-preset="oscilloscope">Oscilloscope</div>
@@ -128,7 +129,8 @@
     </div>
 
     <div class="control-panel">
-      <fieldset class="group-box presets-group">
+      <!-- Modes row hidden: one mode per device now. -->
+      <fieldset class="group-box presets-group" style="display:none">
         <legend>Modes</legend>
         <div class="preset-buttons" id="preset-buttons"></div>
       </fieldset>
